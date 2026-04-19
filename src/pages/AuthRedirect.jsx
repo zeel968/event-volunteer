@@ -14,6 +14,7 @@ function AuthRedirect() {
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState('Initiating security handshake...');
   const syncAttempted = useRef(false);
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
   // 1. TIMEOUT FALLBACK: If handshake takes too long, go home
   useEffect(() => {
@@ -51,7 +52,7 @@ function AuthRedirect() {
         try {
           // SYNC PROFILE: Notify backend about the current session
           const token = await window.Clerk.session.getToken();
-          await fetch('/api/register', {
+          await fetch(API_BASE_URL + '/register', {
             method: 'POST',
             headers: { 
               'Content-Type': 'application/json',
