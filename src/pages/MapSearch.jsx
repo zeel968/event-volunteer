@@ -9,9 +9,20 @@ function MapSearch() {
   const [userLocation, setUserLocation] = useState(null);
 
   useEffect(() => {
-    navigator.geolocation.getCurrentPosition((position) => {
-      setUserLocation([position.coords.latitude, position.coords.longitude]);
-    });
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation([position.coords.latitude, position.coords.longitude]);
+        },
+        (error) => {
+          console.warn("Geolocation failed or denied. Using default location.", error);
+          setUserLocation([28.6139, 77.2090]); // Default to New Delhi fallback
+        },
+        { timeout: 10000 }
+      );
+    } else {
+      setUserLocation([28.6139, 77.2090]);
+    }
   }, []);
 
   const visibleEvents = useMemo(() => {
