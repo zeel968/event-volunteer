@@ -21,10 +21,11 @@ function EventAttendance() {
   };
 
   const selectAll = () => {
-    if (selectedIds.length === approvedApps.length) {
+    const selectableApps = approvedApps.filter(a => a.status === 'Approved');
+    if (selectedIds.length === selectableApps.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(approvedApps.map(a => a.id));
+      setSelectedIds(selectableApps.map(a => a.id));
     }
   };
 
@@ -150,12 +151,16 @@ function EventAttendance() {
                 {approvedApps.map((app, index) => (
                   <tr key={app.id} style={{ borderTop: '1px solid var(--border-glass)' }}>
                     <td style={{ padding: '16px' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={selectedIds.includes(app.id)} 
-                        onChange={() => toggleSelect(app.id)}
-                        style={{ width: '18px', height: '18px' }}
-                      />
+                      {app.status === 'Approved' ? (
+                        <input 
+                          type="checkbox" 
+                          checked={selectedIds.includes(app.id)} 
+                          onChange={() => toggleSelect(app.id)}
+                          style={{ width: '18px', height: '18px' }}
+                        />
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)', display: 'block', width: '18px', textAlign: 'center' }}>✓</span>
+                      )}
                     </td>
                     <td style={{ padding: '16px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
