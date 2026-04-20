@@ -86,17 +86,25 @@ const authenticate = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'No token provided' });
     }
-    const token = authHeader.split(' ')[1];
     if (!clerkClient) {
-      return res.status(500).json({ success: false, error: 'Auth server not ready' });
+      return res.status(500).json({ success: false, error: 'Auth client not initialized' });
     }
-    // Verify the Clerk session token
-    const payload = await clerkClient.verifyToken(token);
-    req.auth = { userId: payload.sub };
+
+    // Use the correct Clerk API: authenticateRequest
+    const authResult = await clerkClient.authenticateRequest(req, {
+      secretKey: process.env.CLERK_SECRET_KEY,
+    });
+
+    if (!authResult.isSignedIn) {
+      console.warn('[Auth] Request not signed in. Status:', authResult.status);
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    req.auth = { userId: authResult.toAuth().userId };
     next();
   } catch (err) {
-    console.error('[Auth] Token verification failed:', err.message);
-    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    console.error('[Auth] Failed:', err.message);
+    return res.status(401).json({ success: false, error: 'Auth failed: ' + err.message });
   }
 };
 
