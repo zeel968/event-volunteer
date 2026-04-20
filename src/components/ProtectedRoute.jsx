@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
  * Checks for BOTH successful Clerk auth AND the correct activePortal in sessionStorage.
  */
 const ProtectedRoute = ({ children, requiredPortal }) => {
-  const { user, authLoading, clerkLoaded, isSignedIn } = useEvents();
+  const { user, isLoaded: clerkLoaded, authLoading, handshakeFailed, isSignedIn } = useEvents();
   const location = useLocation();
   const [activePortal, setActivePortal] = useState(sessionStorage.getItem('activePortal'));
 
@@ -33,7 +33,15 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     return <Navigate to={`/${requiredPortal}/login`} state={{ from: location }} replace />;
   }
 
-  // 3. Profile Isolation Check (Technique 1 requirement)
+  // 3. Handshake Failure Guard
+  // If the security handshake previously failed, DO NOT redirect back to it.
+  // This breaks the infinite flicker loop.
+  if (handshakeFailed) {
+    console.warn('[ProtectedRoute] Handshake failed previously. Staying on current page/login.');
+    return <Navigate to={`/${requiredPortal}/login?error=handshake_failed`} replace />;
+  }
+
+  // 4. Portal Isolation Check
   // Check if they are in the wrong portal session
   if (requiredPortal && activePortal && activePortal !== requiredPortal) {
     console.warn(`[PortalGuard] Portal mismatch. Current: ${activePortal}, Required: ${requiredPortal}`);
@@ -41,7 +49,7 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     return <Navigate to={`/${requiredPortal}/login`} replace />;
   }
 
-  // 4. Missing Profile Check
+  // 5. Missing Profile Check
   // If signed in but no profile exists in context yet
   if (!user) {
     console.warn('[ProtectedRoute] Signed in but no profile found. Handshake might be required.');
@@ -49,7 +57,7 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     if (!activePortal) {
       return <Navigate to={`/${requiredPortal}/login`} replace />;
     }
-    // If we have an activePortal but no profile, redirect to handshake
+    // Only redirect to handshake if it HASN'T failed yet
     return <Navigate to={`/auth-redirect?portal=${activePortal}`} replace />;
   }
 

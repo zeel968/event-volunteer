@@ -9,82 +9,58 @@ import { motion } from 'framer-motion';
  * Preserves the portal intent passed from PortalLogin with high stability.
  */
 function AuthRedirect() {
-  const { authLoading, clerkLoaded, isSignedIn, clerkUser } = useEvents();
+  const { authLoading, clerkLoaded, isSignedIn, clerkUser, setHandshakeFailed } = useEvents();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState('Initiating security handshake...');
+  const [debugUrl, setDebugUrl] = useState(import.meta.env.VITE_API_BASE_URL || '/api');
+  const [showDebug, setShowDebug] = useState(false);
   const syncAttempted = useRef(false);
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
-  // 1. TIMEOUT FALLBACK: If handshake takes too long, go home
-  useEffect(() => {
-    if (!clerkLoaded) return;
-    
-    let timer;
-    if (!isSignedIn) {
-      console.log('[AuthRedirect] Waiting for session sync (Max 10s)...');
-      timer = setTimeout(() => {
-        if (!isSignedIn) {
-          console.warn('[AuthRedirect] Handshake timed out. Redirecting to home.');
-          navigate('/', { replace: true });
-        }
-      }, 10000); // Increased patience to 10 seconds
-    }
-    return () => timer && clearTimeout(timer);
-  }, [clerkLoaded, isSignedIn, navigate]);
-
-  // 2. MAIN SYNC LOGIC
+  // 1. MAIN SYNC LOGIC
   useEffect(() => {
     const finalizeAuth = async () => {
-      // Must wait for Clerk to be ready and User to be signed in
       if (!clerkLoaded || !isSignedIn || authLoading) return;
 
       if (!syncAttempted.current) {
         syncAttempted.current = true;
+        setHandshakeFailed(false); // Reset on new attempt
         
-        // READ THE PORTAL FROM THE URL (fallback to volunteer)
         const portalIntent = searchParams.get('portal');
         const activePortal = portalIntent || sessionStorage.getItem('activePortal') || 'volunteer';
         
-        console.log(`[AuthRedirect] Portal Intent detected: ${activePortal}`);
+        console.log(`[AuthRedirect] Portal Intent: ${activePortal} | Target API: ${debugUrl}`);
         setStatus(`Synchronizing ${activePortal} profile...`);
 
         try {
-          // SYNC PROFILE: Notify backend about the current session
           const token = await window.Clerk.session.getToken();
-          const response = await fetch(API_BASE_URL + '/register', {
+          const response = await fetch(`${debugUrl}/register`, {
             method: 'POST',
             headers: { 
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({ 
-              name: clerkUser.fullName || clerkUser.username || clerkUser.emailAddresses[0].emailAddress.split('@')[0], 
-              email: clerkUser.emailAddresses[0].emailAddress, 
+              name: clerkUser.fullName || clerkUser.username || clerkUser.primaryEmailAddress?.emailAddress?.split('@')[0], 
+              email: clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses[0]?.emailAddress, 
               role: activePortal 
             })
           });
 
           if (!response.ok) {
             const errorText = await response.text();
-            // If we get HTML back, it means the API route is misconfigured (likely Vercel index.html rewrite)
             if (errorText.includes('<!DOCTYPE html>') || errorText.includes('<html')) {
-              throw new Error('API Route Mismatch: The server returned HTML instead of JSON. Please check your Vercel rewrites or VITE_API_BASE_URL.');
+              throw new Error(`API Route Mismatch: The server at [${debugUrl}] returned HTML (likely your own index.html). This usually means your VITE_API_BASE_URL is wrong or Vercel is redirecting API calls back to the frontend.`);
             }
             throw new Error(`Server responded with ${response.status}: ${errorText}`);
           }
 
           const data = await response.json();
-          if (!data.success) {
-            throw new Error(data.error || 'Registration failed on server.');
-          }
+          if (!data.success) throw new Error(data.error || 'Registration failed on server.');
 
-          // LOCK THE PORTAL (Source of truth for ProtectedRoute)
           sessionStorage.setItem('activePortal', activePortal);
-          
           setStatus(`Finalizing ${activePortal} dashboard...`);
           
-          // Slight delay for visual confirmation of "Security Handshake"
           setTimeout(() => {
             navigate(activePortal === 'organizer' ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
           }, 600);
@@ -92,26 +68,17 @@ function AuthRedirect() {
         } catch (err) {
           console.error('[AuthRedirect] Handshake sync failed:', err);
           setStatus(`Handshake Error: ${err.message}`);
-          
-          // CRITICAL: Stop the loop. Don't navigate automatically if it failed.
-          // Let the user see the error or stay on this page.
-          // If we proceed with local session, it might loop if ProtectedRoute rejects it.
-          // sessionStorage.setItem('activePortal', activePortal);
-          // navigate(activePortal === 'organizer' ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
+          setHandshakeFailed(true); // Signal to ProtectedRoute to stop the loop
         }
       }
     };
 
     finalizeAuth();
-  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser, API_BASE_URL]);
+  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser, debugUrl, setHandshakeFailed]);
 
   return (
     <div style={{ minHeight: '100vh', background: '#060608', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '30px' }}>
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        style={{ position: 'relative' }}
-      >
+      <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} style={{ position: 'relative' }}>
          <motion.div 
            animate={!status.includes('Error') ? { rotate: 360 } : {}} 
            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
@@ -121,21 +88,64 @@ function AuthRedirect() {
             {status.includes('Error') ? <ShieldCheck size={36} /> : <Zap size={36} className="animate-pulse" />}
          </div>
       </motion.div>
-      <div style={{ textAlign: 'center', maxWidth: '400px', padding: '0 20px' }}>
-        <h2 style={{ color: '#fff', fontSize: '1.6rem', fontWeight: 800, marginBottom: '12px', letterSpacing: '-0.5px' }}>
+
+      <div style={{ textAlign: 'center', maxWidth: '500px', padding: '0 20px' }}>
+        <h2 style={{ color: '#fff', fontSize: '1.6rem', fontWeight: 800, marginBottom: '12px' }}>
           {status.includes('Error') ? 'Handshake Failed' : 'Security Handshake'}
         </h2>
-        <p style={{ color: status.includes('Error') ? '#ff4d4d' : '#888', fontSize: '1rem', lineHeight: 1.5 }}>{status}</p>
+        <p style={{ color: status.includes('Error') ? '#ff4d4d' : '#888', fontSize: '0.9rem', lineHeight: 1.6, background: status.includes('Error') ? 'rgba(255,0,0,0.1)' : 'transparent', padding: '10px', borderRadius: '8px' }}>
+          {status}
+        </p>
         
         {status.includes('Error') && (
-          <button 
-            onClick={() => { syncAttempted.current = false; setStatus('Retrying handshake...'); }}
-            style={{ marginTop: '20px', padding: '10px 20px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', borderRadius: '10px', cursor: 'pointer' }}
-          >
-            Retry Handshake
-          </button>
+          <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px', justifyContent: 'center' }}>
+            <button 
+              onClick={() => { syncAttempted.current = false; setStatus('Retrying handshake...'); setHandshakeFailed(false); }}
+              style={{ padding: '12px 24px', background: '#fff', color: '#000', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}
+            >
+              Retry Handshake
+            </button>
+            <button 
+              onClick={() => setShowDebug(!showDebug)}
+              style={{ padding: '12px 24px', background: 'rgba(255,255,255,0.05)', color: '#888', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
+            >
+              {showDebug ? 'Hide Debug' : 'Debug API URL'}
+            </button>
+          </div>
+        )}
+
+        {showDebug && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={{ marginTop: '30px', padding: '20px', background: '#111', borderRadius: '16px', border: '1px solid #222', textAlign: 'left' }}>
+            <p style={{ color: '#aaa', fontSize: '0.8rem', marginBottom: '10px' }}>Current Base URL: <code style={{color: '#00e5ff'}}>{debugUrl}</code></p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <input 
+                type="text" 
+                placeholder="https://your-backend.railway.app/api" 
+                style={{ flex: 1, background: '#000', border: '1px solid #333', color: '#fff', padding: '10px', borderRadius: '8px', fontSize: '0.8rem' }}
+                value={debugUrl === '/api' ? '' : debugUrl}
+                onChange={(e) => setDebugUrl(e.target.value)}
+              />
+              <button 
+                onClick={() => { syncAttempted.current = false; setStatus('Attempting with new URL...'); setHandshakeFailed(false); }}
+                style={{ background: '#00e5ff', color: '#000', border: 'none', padding: '0 15px', borderRadius: '8px', fontWeight: 'bold' }}
+              >
+                Apply
+              </button>
+            </div>
+            <p style={{ marginTop: '10px', color: '#666', fontSize: '0.75rem' }}>
+              TIP: If you are on Vercel, relative paths like "/api" often fail. Try your full backend URL from Railway.
+            </p>
+          </motion.div>
         )}
       </div>
+
+      <style>{`
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+      `}</style>
+    </div>
+  );
+}
 
       
       <style>{`

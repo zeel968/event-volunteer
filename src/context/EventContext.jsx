@@ -352,6 +352,9 @@ export const EventProvider = ({ children }) => {
     } catch (error) { return []; }
   };
 
+  const [handshakeFailed, setHandshakeFailed] = useState(false);
+  const [handshakeError, setHandshakeError] = useState(null);
+
   return (
     <EventContext.Provider value={{
       events, applications, user, authLoading, notifications,
@@ -361,7 +364,9 @@ export const EventProvider = ({ children }) => {
       applyToEvent, updateApplicationStatus,
       startEvent, finishEvent, markAttendance,
       createPayment, payAll, confirmPayment, savePaymentInfo,
-      fetchProfilesByEmails
+      fetchProfilesByEmails,
+      handshakeFailed, setHandshakeFailed,
+      handshakeError, setHandshakeError
     }}>
       {children}
     </EventContext.Provider>
