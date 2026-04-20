@@ -37,7 +37,8 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:3000',
-  /\.vercel\.app$/  // Allows any Vercel deployment/preview URL
+  /\.vercel\.app$/,      // Allows any Vercel deployment/preview URL
+  /vercel\.app$/         // Also allows root vercel.app if needed
 ];
 
 app.use(cors({

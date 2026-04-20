@@ -17,7 +17,7 @@ export const EventProvider = ({ children }) => {
     // 1. Check localStorage for a custom fix
     const saved = localStorage.getItem('custom_api_url');
     // 2. Fallback to Environment Variable or production default
-    return saved || import.meta.env.VITE_API_BASE_URL || 'https://event-volunteer-production.up.railway.app/api';
+    return saved || import.meta.env.VITE_API_BASE_URL || 'https://web-production-ce51a.up.railway.app/api';
   });
 
   const updateApiUrl = (newUrl) => {

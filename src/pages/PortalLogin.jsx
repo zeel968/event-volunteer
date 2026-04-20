@@ -23,13 +23,19 @@ const PortalLogin = ({ portal }) => {
   const PortalIcon = isOrganizer ? ShieldCheck : Users;
   const portalName = isOrganizer ? "Organizer" : "Volunteer";
 
-  // KEY FIX: If user is already signed in, just set the portal and redirect
+  // KEY FIX: Automate the transition
   useEffect(() => {
-    if (clerkLoaded && isSignedIn && user) {
-      sessionStorage.setItem('activePortal', portal);
-      navigate(isOrganizer ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
+    if (clerkLoaded && !authLoading && isSignedIn) {
+      if (user) {
+        // Case A: User has a profile -> Dashboard
+        sessionStorage.setItem('activePortal', portal);
+        navigate(isOrganizer ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
+      } else {
+        // Case B: User is signed in but has NO profile yet -> Redirect to Handshake
+        navigate(`/auth-redirect?portal=${portal}`, { replace: true });
+      }
     }
-  }, [clerkLoaded, isSignedIn, user, portal, navigate, isOrganizer]);
+  }, [clerkLoaded, authLoading, isSignedIn, user, portal, navigate, isOrganizer]);
 
   // Shared Clerk Props
   const clerkProps = {
@@ -124,16 +130,15 @@ const PortalLogin = ({ portal }) => {
     // Signed in but no profile yet (Handshake needed)
     return (
       <div style={{ minHeight: "100vh", background: "#060608", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <h2 style={{ color: '#fff', fontSize: '1.4rem' }}>Session Detected</h2>
-          <p style={{ color: '#888', marginTop: '10px' }}>Your account is signed in, but we need to synchronize your {portalName} portal.</p>
+        <motion.div 
+          animate={{ rotate: 360 }} 
+          transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+          style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%', marginBottom: '24px' }} 
+        />
+        <div style={{ textAlign: 'center' }}>
+          <h2 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 800 }}>Synchronizing Portal</h2>
+          <p style={{ color: '#888', marginTop: '10px' }}>Initializing security handshake for your {portalName} account...</p>
         </div>
-        <button 
-          onClick={() => navigate(`/auth-redirect?portal=${portal}`)}
-          style={{ background: themeColor, color: '#000', padding: '12px 24px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}
-        >
-          Initialize Security Handshake
-        </button>
       </div>
     );
   }

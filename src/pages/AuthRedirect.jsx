@@ -52,14 +52,19 @@ function AuthRedirect() {
 
           if (!response.ok) {
             const errorText = await response.text();
-
+            const status = response.status;
+            
             // AUTOMATIC HEALING: If we see a 405 or 404 on the Vercel Domain, we KNOW it's a config issue
-            if (response.status === 405 || response.status === 404 || errorText.includes('<!DOCTYPE html>')) {
+            if (status === 405 || status === 404 || errorText.includes('<!DOCTYPE html>')) {
               setShowDebug(true); // Automatically show the fix-it box
-              throw new Error(`Connection Mismatch (405): You are currently trying to talk to the Backend at [${apiUrl}]. Since your backend is on Railway, this URL is likely incorrect. Please enter your FULL Railway URL below.`);
+              throw new Error(`Connection Mismatch (${status}): Talking to [${apiUrl}]. This endpoint rejected the request. Please verify your Railway URL includes /api.`);
+            }
+            
+            if (status === 401) {
+              throw new Error(`Auth Error (401): Backend rejected your Clerk session. Check CLERK_SECRET_KEY on Railway.`);
             }
 
-            throw new Error(`Server responded with ${response.status}: ${errorText}`);
+            throw new Error(`Server Error (${status}): ${errorText.substring(0, 50)}...`);
           }
 
           const data = await response.json();
@@ -73,9 +78,14 @@ function AuthRedirect() {
           }, 600);
 
         } catch (err) {
-          console.error('[AuthRedirect] Handshake sync failed:', err);
-          setStatus(`Handshake Error: ${err.message}`);
-          setHandshakeFailed(true); // Signal to ProtectedRoute to stop the loop
+          console.error('[Handshake] Error:', err);
+          let userMsg = err.message;
+          if (userMsg === 'Failed to fetch') {
+            userMsg = 'Network Error (Possible CORS issue or Internal Server Error). Check if Railway is active.';
+            setShowDebug(true);
+          }
+          setStatus(`Handshake Error: ${userMsg}`);
+          setHandshakeFailed(true);
         }
       }
     };
@@ -131,7 +141,7 @@ function AuthRedirect() {
             <div style={{ display: 'flex', gap: '10px' }}>
               <input
                 type="text"
-                placeholder="event-volunteer-production.up.railway.app"
+                placeholder="web-production-ce51a.up.railway.app"
                 style={{ flex: 1, background: '#000', border: '1px solid #333', color: '#fff', padding: '12px 16px', borderRadius: '12px', fontSize: '0.9rem', outline: 'none' }}
                 value={tempUrl === '/api' ? '' : tempUrl}
                 onChange={(e) => setTempUrl(e.target.value)}
