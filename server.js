@@ -5,7 +5,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto, { randomUUID } from 'crypto';
 import Razorpay from 'razorpay';
-import { requireAuth, createClerkClient } from '@clerk/express';
+import { createClerkClient } from '@clerk/express';
 import { supabase } from './supabase.js';
 
 // Catch any unhandled crashes so Railway logs show them clearly
@@ -77,6 +77,30 @@ try {
 }
 
 // -------------------------------------------------------
+// Manual auth middleware (replaces authenticate)
+// More reliable without needing global clerkMiddleware
+// -------------------------------------------------------
+const authenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'No token provided' });
+    }
+    const token = authHeader.split(' ')[1];
+    if (!clerkClient) {
+      return res.status(500).json({ success: false, error: 'Auth server not ready' });
+    }
+    // Verify the Clerk session token
+    const payload = await clerkClient.verifyToken(token);
+    req.auth = { userId: payload.sub };
+    next();
+  } catch (err) {
+    console.error('[Auth] Token verification failed:', err.message);
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+};
+
+// -------------------------------------------------------
 // Razorpay client
 // -------------------------------------------------------
 let razorpay = null;
@@ -90,9 +114,7 @@ try {
   console.error('[Razorpay] Failed to initialize:', err.message);
 }
 
-// -------------------------------------------------------
 // Request logger
-// -------------------------------------------------------
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
@@ -158,11 +180,11 @@ const applications = [];
 const notifications = [];
 
 // -------------------------------------------------------
-// Protected Routes — requireAuth() applied per-route
+// Protected Routes — authenticate applied per-route
 // -------------------------------------------------------
 
 // Profile
-app.get('/api/profile', requireAuth(), async (req, res) => {
+app.get('/api/profile', authenticate, async (req, res) => {
   try {
     const profile = await syncProfile(req.auth.userId);
     if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
@@ -172,7 +194,7 @@ app.get('/api/profile', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/profile', requireAuth(), async (req, res) => {
+app.post('/api/profile', authenticate, async (req, res) => {
   try {
     const profile = await syncProfile(req.auth.userId);
     if (!profile || profile.virtual) {
@@ -192,7 +214,7 @@ app.post('/api/profile', requireAuth(), async (req, res) => {
 });
 
 // Role switch
-app.post('/api/user/switch-role', requireAuth(), async (req, res) => {
+app.post('/api/user/switch-role', authenticate, async (req, res) => {
   try {
     const { role } = req.body;
     if (!['organizer', 'volunteer'].includes(role)) {
@@ -213,7 +235,7 @@ app.post('/api/user/switch-role', requireAuth(), async (req, res) => {
 });
 
 // Events
-app.post('/api/events', requireAuth(), async (req, res) => {
+app.post('/api/events', authenticate, async (req, res) => {
   try {
     const e = req.body;
     if (!e.id || !e.title) return res.status(400).json({ success: false, error: 'Invalid event' });
@@ -225,7 +247,7 @@ app.post('/api/events', requireAuth(), async (req, res) => {
 });
 
 // End Event
-app.post('/api/events/end', requireAuth(), async (req, res) => {
+app.post('/api/events/end', authenticate, async (req, res) => {
   try {
     const { eventId } = req.body;
     const profile = await syncProfile(req.auth.userId);
@@ -259,13 +281,13 @@ app.post('/api/events/end', requireAuth(), async (req, res) => {
 });
 
 // Backward compat finish route
-app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
+app.post('/api/events/:eventId/finish', authenticate, async (req, res) => {
   const idx = events.findIndex(e => e.id === Number(req.params.eventId));
   if (idx !== -1) events[idx].status = 'Finished';
   return res.json({ success: true });
 });
 
-app.post('/api/events/:eventId/mark-attendance', requireAuth(), async (req, res) => {
+app.post('/api/events/:eventId/mark-attendance', authenticate, async (req, res) => {
   try {
     const { applicationIds, status = 'Present' } = req.body;
     applicationIds.forEach(appId => {
@@ -279,7 +301,7 @@ app.post('/api/events/:eventId/mark-attendance', requireAuth(), async (req, res)
 });
 
 // Applications
-app.post('/api/applications', requireAuth(), async (req, res) => {
+app.post('/api/applications', authenticate, async (req, res) => {
   try {
     const a = req.body;
     if (!a.id || !a.eventId) return res.status(400).json({ success: false, error: 'Invalid application' });
@@ -291,7 +313,7 @@ app.post('/api/applications', requireAuth(), async (req, res) => {
 });
 
 // Payments
-app.post('/api/payments/create', requireAuth(), async (req, res) => {
+app.post('/api/payments/create', authenticate, async (req, res) => {
   try {
     if (!razorpay) return res.status(500).json({ success: false, error: 'Razorpay not configured' });
     const { amount, receipt, applicationId } = req.body;
@@ -309,7 +331,7 @@ app.post('/api/payments/create', requireAuth(), async (req, res) => {
   }
 });
 
-app.post('/api/payments/verify', requireAuth(), async (req, res) => {
+app.post('/api/payments/verify', authenticate, async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, applicationId } = req.body;
     const sig = crypto
