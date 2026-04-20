@@ -102,7 +102,7 @@ export const EventProvider = ({ children }) => {
     if (!isSignedIn || !clerkUser) return { success: false, error: 'Not authenticated' };
     try {
       console.log(`[RoleSwitch] Switching to ${role}...`);
-      const response = await api.post('/api/user/switch-role', { role });
+      const response = await api.post('/user/switch-role', { role });
       
       if (response.data.success) {
         // Force Clerk to reload user metadata in the session
@@ -139,7 +139,7 @@ export const EventProvider = ({ children }) => {
   const finishEvent = async (eventId) => {
     try {
       // Aligned with user's specific request for /api/events/end
-      const response = await api.post('/api/events/end', { eventId });
+      const response = await api.post('/events/end', { eventId });
       if (response.data.success) {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Finished' } : e));
       }

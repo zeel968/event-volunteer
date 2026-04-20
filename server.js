@@ -271,6 +271,52 @@ app.post('/api/profile', requireAuth(), async (req, res) => {
   return res.json({ success: true, profile: data });
 });
 
+// -------------------------------------------------------
+// Payment Routes (restored — these were missing!)
+// -------------------------------------------------------
+
+app.post('/api/payments/create', requireAuth(), async (req, res) => {
+  try {
+    const { amount, receipt, applicationId } = req.body;
+    const order = await razorpay.orders.create({
+      amount: Number(amount),
+      currency: 'INR',
+      receipt: receipt.toString(),
+      payment_capture: 1,
+      notes: { applicationId: applicationId.toString() }
+    });
+    return res.json({ success: true, order });
+  } catch (err) {
+    console.error('[Payment] Razorpay create order error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to create payment order' });
+  }
+});
+
+app.post('/api/payments/verify', requireAuth(), async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, applicationId } = req.body;
+    const generatedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+
+    if (generatedSignature !== razorpay_signature) {
+      return res.status(400).json({ success: false, error: 'Invalid signature' });
+    }
+
+    const ids = applicationId.toString().split(',').map(id => Number(id.trim()));
+    ids.forEach(id => {
+      const idx = applications.findIndex(app => app.id === id);
+      if (idx !== -1) applications[idx].status = 'Paid';
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Payment] Verify error:', err);
+    return res.status(500).json({ success: false, error: 'Payment verification failed' });
+  }
+});
+
 app.post('/api/webhooks/razorpay', async (req, res) => {
   return res.json({ status: 'ok' });
 });
