@@ -13,8 +13,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@clerk/backend": "^3.2.13",
     "@clerk/clerk-react": "^5.61.5",
+    "@clerk/express": "^2.1.5",
     "@react-google-maps/api": "^2.20.8",
     "@sendgrid/mail": "^8.1.6",
     "@supabase/supabase-js": "^2.102.1",

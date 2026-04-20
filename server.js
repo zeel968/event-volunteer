@@ -6,7 +6,7 @@ import cors from 'cors';
 import crypto, { randomInt, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import Razorpay from 'razorpay';
-import { clerkMiddleware, requireAuth, createClerkClient } from '@clerk/backend';
+import { clerkMiddleware, requireAuth, createClerkClient } from '@clerk/express';
 import { supabase } from './supabase.js';
 
 // Global Environment Check
