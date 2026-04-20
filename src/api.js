@@ -5,18 +5,30 @@ const api = axios.create({
   timeout: 10000,
 });
 
+// A placeholder for the token provider (will be set by EventContext)
+let tokenProvider = null;
+
+export const setTokenProvider = (provider) => {
+  tokenProvider = provider;
+};
+
 /**
  * Native Clerk Token Interceptor
- * Automatically attaches the Clerk session token to every outgoing request.
+ * Uses the registered token provider to fetch a fresh session token for every request.
  */
 api.interceptors.request.use(async (config) => {
   try {
-    // We assume Clerk is available globally via window.Clerk or passed through headers
-    // But since we are inside a context usually, we'll let the context set the header or 
-    // better: use a dynamic approach.
-    const token = await window.Clerk?.session?.getToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    if (tokenProvider) {
+      const token = await tokenProvider();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } else {
+      // Fallback for cases before provider is registered (SSR or early loads)
+      const token = await window.Clerk?.session?.getToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
   } catch (error) {
     console.error('[API] Failed to get Clerk token:', error);

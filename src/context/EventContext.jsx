@@ -2,7 +2,7 @@ import { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { useUser, useAuth } from '@clerk/clerk-react';
 import { mockEventsData } from '../data/mockEvents';
 import { supabase } from '../supabaseClient'; 
-import api from '../api';
+import api, { setTokenProvider } from '../api';
 
 const EventContext = createContext();
 
@@ -11,6 +11,13 @@ export const useEvents = () => useContext(EventContext);
 export const EventProvider = ({ children }) => {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
   const { getToken } = useAuth();
+  
+  // Register the token provider so api.js can fetch tokens on demand
+  useEffect(() => {
+    if (clerkLoaded) {
+      setTokenProvider(getToken);
+    }
+  }, [clerkLoaded, getToken]);
   
   // Basic State
   const [events, setEvents] = useState(() => {
@@ -49,9 +56,9 @@ export const EventProvider = ({ children }) => {
     const syncProfile = async () => {
       try {
         setAuthLoading(true);
-        const { data: profile } = await api.get('/profile');
-        if (profile) {
-          setUser(profile);
+        const response = await api.get('/profile');
+        if (response.data.success && response.data.profile) {
+          setUser(response.data.profile);
         }
       } catch (err) {
         console.error('[Sync] Profile sync failed:', err);
