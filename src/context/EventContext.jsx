@@ -16,13 +16,18 @@ export const EventProvider = ({ children }) => {
   const [apiUrl, setApiUrl] = useState(() => {
     // 1. Check localStorage for a custom fix
     const saved = localStorage.getItem('custom_api_url');
-    // 2. Fallback to Environment Variable or default
-    return saved || import.meta.env.VITE_API_BASE_URL || '/api';
+    // 2. Fallback to Environment Variable or production default
+    return saved || import.meta.env.VITE_API_BASE_URL || 'https://event-volunteer-production.up.railway.app/api';
   });
 
   const updateApiUrl = (newUrl) => {
-    localStorage.setItem('custom_api_url', newUrl);
-    setApiUrl(newUrl);
+    let sanitized = newUrl.trim();
+    if (!sanitized.startsWith('http')) sanitized = 'https://' + sanitized;
+    if (sanitized.endsWith('/')) sanitized = sanitized.slice(0, -1);
+    if (!sanitized.endsWith('/api')) sanitized += '/api';
+
+    localStorage.setItem('custom_api_url', sanitized);
+    setApiUrl(sanitized);
     // Reload to ensure all context and effects catch the change
     window.location.reload();
   };

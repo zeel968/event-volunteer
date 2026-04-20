@@ -30,7 +30,35 @@ app.use(express.json({
     req.rawBody = buf;
   }
 }));
-app.use(cors());
+// -------------------------------------------------------
+// CORS Configuration
+// -------------------------------------------------------
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  /\.vercel\.app$/  // Allows any Vercel deployment/preview URL
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.some(pattern => 
+      pattern instanceof RegExp ? pattern.test(origin) : pattern === origin
+    )) {
+      callback(null, true);
+    } else {
+      console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200 // For legacy browsers
+}));
 
 
 const PORT = process.env.PORT || 5000;
