@@ -2,6 +2,7 @@ import { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { useUser, useAuth } from '@clerk/clerk-react';
 import { mockEventsData } from '../data/mockEvents';
 import { supabase } from '../supabaseClient'; 
+import api from '../api';
 
 const EventContext = createContext();
 
@@ -12,11 +13,9 @@ export const EventProvider = ({ children }) => {
   const { getToken } = useAuth();
   const hasHydrated = useRef(false);
 
-  // --- AUTO-HEALING API LOGIC ---
+  // --- API MANAGEMENT ---
   const [apiUrl, setApiUrl] = useState(() => {
-    // 1. Check localStorage for a custom fix
     const saved = localStorage.getItem('custom_api_url');
-    // 2. Fallback to Environment Variable or production default
     return saved || import.meta.env.VITE_API_BASE_URL || 'https://web-production-ce51a.up.railway.app/api';
   });
 
@@ -28,9 +27,13 @@ export const EventProvider = ({ children }) => {
 
     localStorage.setItem('custom_api_url', sanitized);
     setApiUrl(sanitized);
-    // Reload to ensure all context and effects catch the change
+    api.defaults.baseURL = sanitized; 
     window.location.reload();
   };
+
+  useEffect(() => {
+    api.defaults.baseURL = apiUrl;
+  }, [apiUrl]);
   // ------------------------------
 
   const [events, setEvents] = useState(() => {
@@ -56,236 +59,175 @@ export const EventProvider = ({ children }) => {
   useEffect(() => { localStorage.setItem('app_current_user', JSON.stringify(user)); }, [user]);
   useEffect(() => { localStorage.setItem('app_notifications', JSON.stringify(notifications)); }, [notifications]);
 
-  const syncProfile = async (clerkToken) => {
+  /**
+   * Centralized Auth Verification
+   * Replaces the old "Security Handshake"
+   */
+  const checkAuth = async () => {
+    if (!isSignedIn) {
+      setUser(null);
+      localStorage.removeItem('clerk-db-session');
+      setAuthLoading(false);
+      return;
+    }
+
     try {
-      const response = await fetch(apiUrl + '/profile', {
-        headers: { 'Authorization': 'Bearer ' + clerkToken }
-      });
+      const token = await getToken();
+      if (!token) throw new Error('No session token');
       
-      if (!response.ok) {
-         console.warn(`[Sync] Profile fetch failed with status: ${response.status}`);
-         return null;
-      }
+      // Store token for Axios interceptor
+      localStorage.setItem('clerk-db-session', token);
 
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await response.text();
-        if (text.includes("<!DOCTYPE html>")) {
-           console.error("[Sync] Critical: Server returned HTML instead of JSON. Check VITE_API_BASE_URL and Vercel rewrites.");
-        }
-        return null;
-      }
-
-      const data = await response.json();
-      if (data.success) {
-        if (data.sessionToken) {
-          localStorage.setItem('session_token', data.sessionToken);
-        }
-        setUser({ ...data.profile });
-        return data.profile;
+      // Call the simplified verification endpoint
+      const response = await api.get('/auth/verify');
+      if (response.data.success) {
+        setUser(response.data.user);
+      } else {
+        throw new Error('Verification failed');
       }
     } catch (err) {
-      console.error('Profile sync error:', err);
+      console.error('[AuthCheck] JWT Verification Failed:', err.message);
+      setUser(null);
+      localStorage.removeItem('clerk-db-session');
+    } finally {
+      setAuthLoading(false);
     }
-    return null;
   };
 
-  // Hydrate backend memory with local storage data
+  // Run verification on app load / auth change
   useEffect(() => {
-    if (!clerkLoaded || !isSignedIn || hasHydrated.current) return;
+    if (clerkLoaded) {
+      checkAuth();
+    }
+  }, [clerkLoaded, isSignedIn]);
+
+  // Synchronize browser state to backend if logged in
+  useEffect(() => {
+    if (!clerkLoaded || !isSignedIn || hasHydrated.current || authLoading) return;
 
     const hydrateBackend = async () => {
-      const token = await getToken();
-      if (!token) return;
-
       console.log('[Sync] Hydrating backend with local data...');
       
-      // Sync events
-      for (const event of events) {
-        await fetch(apiUrl + '/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify(event)
-        }).catch(() => {});
-      }
+      try {
+        // Sync events
+        for (const event of events) {
+          await api.post('/events', event).catch(() => {});
+        }
 
-      // Sync applications
-      if (applications.length > 0) {
-        await fetch(apiUrl + '/sync-applications', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify({ updatedApps: applications })
-        }).catch(() => {});
-      }
+        // Sync applications
+        if (applications.length > 0) {
+          await api.post('/sync-applications', { updatedApps: applications }).catch(() => {});
+        }
 
-      hasHydrated.current = true;
-      console.log('[Sync] Backend hydration complete.');
+        hasHydrated.current = true;
+        console.log('[Sync] Backend hydration complete.');
+      } catch (err) {
+        console.error('[Sync] Hydration failed:', err);
+      }
     };
 
     hydrateBackend();
-  }, [clerkLoaded, isSignedIn]);
-
-  useEffect(() => {
-    if (!clerkLoaded) return;
-
-    const handleAuthChange = async () => {
-      if (isSignedIn) {
-        try {
-          const token = await getToken();
-          if (token) {
-            await syncProfile(token);
-          }
-        } catch (err) {
-          console.error('[EventContext] Auth change sync error:', err);
-        }
-      } else {
-        localStorage.removeItem('auth_token');
-        setUser(null);
-      }
-      setAuthLoading(false);
-    };
-
-    handleAuthChange();
-  }, [clerkLoaded, isSignedIn]);
+  }, [clerkLoaded, isSignedIn, authLoading]);
 
   const login = async (email, role, token) => {
     if (token) {
-      const profile = await syncProfile(token);
-      if (profile) return true;
+        localStorage.setItem('clerk-db-session', token);
+        const response = await api.get('/auth/verify').catch(() => null);
+        if (response?.data?.success) {
+            setUser(response.data.user);
+            return true;
+        }
     }
     return false;
   };
 
   const logout = async () => {
+    localStorage.removeItem('clerk-db-session');
     localStorage.removeItem('session_token');
     sessionStorage.removeItem('activePortal');
     setUser(null);
   };
 
   const setRole = async (role) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
-    if (!token || !clerkUser) return { success: false, error: 'Not authenticated' };
+    if (!clerkUser) return { success: false, error: 'Not authenticated' };
     
     try {
       const email = clerkUser.primaryEmailAddress ? clerkUser.primaryEmailAddress.emailAddress : clerkUser.emailAddresses[0].emailAddress;
       const name = clerkUser.fullName || email.split('@')[0];
 
-      const response = await fetch(apiUrl + '/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, role, clerkId: clerkUser.id })
-      });
-      const data = await response.json();
-      if (data.success) {
-        await syncProfile(token);
+      const response = await api.post('/register', { name, email, role, clerkId: clerkUser.id });
+      if (response.data.success) {
+        await checkAuth();
         return { success: true };
       }
-      return { success: false, error: data.error };
+      return { success: false, error: response.data.error };
     } catch (err) {
       console.error('Set role error:', err);
-      return { success: false };
+      return { success: false, error: 'Network error' };
     }
   };
 
   const startEvent = async (eventId) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/events/' + eventId + '/start', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
-      const data = await response.json();
-      if (data.success) {
+      const response = await api.post(`/events/${eventId}/start`);
+      if (response.data.success) {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Live' } : e));
       }
-      return data;
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const finishEvent = async (eventId) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/events/' + eventId + '/finish', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token }
-      });
-      const data = await response.json();
-      if (data.success) {
+      const response = await api.post(`/events/${eventId}/finish`);
+      if (response.data.success) {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Finished' } : e));
       }
-      return data;
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const markAttendance = async (eventId, applicationIds, status = 'Present') => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/events/' + eventId + '/mark-attendance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ applicationIds, status })
-      });
-      const data = await response.json();
-      if (data.success) {
+      const response = await api.post(`/events/${eventId}/mark-attendance`, { applicationIds, status });
+      if (response.data.success) {
         setApplications(prev => prev.map(app => applicationIds.includes(app.id) ? { ...app, status } : app));
       }
-      return data;
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const createPayment = async (amount, receipt, applicationId) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/payments/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ amount, receipt, applicationId })
-      });
-      return await response.json();
+      const response = await api.post('/payments/create', { amount, receipt, applicationId });
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const confirmPayment = async (paymentData) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/payments/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify(paymentData)
-      });
-      const data = await response.json();
-      if (data.success) {
+      const response = await api.post('/payments/verify', paymentData);
+      if (response.data.success) {
         const ids = paymentData.applicationId.toString().split(',').map(id => Number(id.trim()));
         setApplications(prev => prev.map(app => ids.includes(app.id) ? { ...app, status: 'Paid' } : app));
       }
-      return data;
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const payAll = async (payments) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(apiUrl + '/payments/pay-all', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ payments })
-      });
-      return await response.json();
+      const response = await api.post('/payments/pay-all', { payments });
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
   const savePaymentInfo = async (upiId) => {
-    const token = await getToken() || localStorage.getItem('auth_token');
     try {
       const profileId = user ? user.id : clerkUser ? clerkUser.id : null;
-      const response = await fetch(apiUrl + '/profiles/' + profileId + '/payment-info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ upi_id: upiId })
-      });
-      const data = await response.json();
-      if (data.success) setUser(prev => ({ ...prev, upi_id: upiId }));
-      return data;
+      const response = await api.post(`/profiles/${profileId}/payment-info`, { upi_id: upiId });
+      if (response.data.success) setUser(prev => ({ ...prev, upi_id: upiId }));
+      return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
 
@@ -298,13 +240,8 @@ export const EventProvider = ({ children }) => {
     const eventWithId = { ...newEvent, id, organizerEmail: user?.email };
     setEvents([...events, eventWithId]);
 
-    const token = await getToken() || localStorage.getItem('auth_token');
-    if (token) {
-      await fetch(apiUrl + '/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify(eventWithId)
-      }).catch(err => console.error('[Sync] Failed to sync event:', err));
+    if (isSignedIn) {
+      await api.post('/events', eventWithId).catch(err => console.error('[Sync] Failed to sync event:', err));
     }
   };
 
@@ -316,13 +253,8 @@ export const EventProvider = ({ children }) => {
     };
     setApplications([...applications, newApplication]);
 
-    const token = await getToken() || localStorage.getItem('auth_token');
-    if (token) {
-        await fetch(apiUrl + '/applications', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-          body: JSON.stringify(newApplication)
-        }).catch(err => console.error('[Sync] Failed to sync application:', err));
+    if (isSignedIn) {
+        await api.post('/applications', newApplication).catch(err => console.error('[Sync] Failed to sync application:', err));
     }
   };
 
@@ -350,13 +282,8 @@ export const EventProvider = ({ children }) => {
       return app;
     }));
 
-    const token = await getToken() || localStorage.getItem('auth_token');
-    if (token && updatedApp) {
-        await fetch(apiUrl + '/sync-applications', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-            body: JSON.stringify({ updatedApps: [updatedApp] })
-        }).catch(err => console.error('[Sync] Failed to sync application status:', err));
+    if (isSignedIn && updatedApp) {
+        await api.post('/sync-applications', { updatedApps: [updatedApp] }).catch(err => console.error('[Sync] Failed to sync application status:', err));
     }
   };
 
@@ -371,9 +298,6 @@ export const EventProvider = ({ children }) => {
     } catch (error) { return []; }
   };
 
-  const [handshakeFailed, setHandshakeFailed] = useState(false);
-  const [handshakeError, setHandshakeError] = useState(null);
-
   return (
     <EventContext.Provider value={{
       events, applications, user, authLoading, notifications,
@@ -384,8 +308,6 @@ export const EventProvider = ({ children }) => {
       startEvent, finishEvent, markAttendance,
       createPayment, payAll, confirmPayment, savePaymentInfo,
       fetchProfilesByEmails,
-      handshakeFailed, setHandshakeFailed,
-      handshakeError, setHandshakeError,
       apiUrl, updateApiUrl
     }}>
       {children}

@@ -138,7 +138,12 @@ const authenticateToken = async (req, res, next) => {
 
 
 // -------------------------------------------------------
-// Persistence Logic: Supabase used for Profiles & OTPs
+// Auth: Verify Token & Get Profile
+// -------------------------------------------------------
+app.get('/api/auth/verify', authenticateToken, (req, res) => {
+  // authenticateToken middleware populates req.user
+  res.json({ success: true, user: req.user });
+});
 // Mock arrays removed for Users. Events/Apps still mock/memory for now.
 // -------------------------------------------------------
 

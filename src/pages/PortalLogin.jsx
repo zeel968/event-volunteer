@@ -13,7 +13,7 @@ import { useEvents } from "../context/EventContext";
 const PortalLogin = ({ portal }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { clerkLoaded, isSignedIn, user } = useEvents();
+  const { clerkLoaded, authLoading, isSignedIn, user } = useEvents();
   
   // Detect if we are on a register sub-route
   const isSignUp = location.pathname.includes('register');
@@ -31,7 +31,7 @@ const PortalLogin = ({ portal }) => {
         sessionStorage.setItem('activePortal', portal);
         navigate(isOrganizer ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
       } else {
-        // Case B: User is signed in but has NO profile yet -> Redirect to Handshake
+        // Case B: User is signed in but has NO profile yet -> Redirect to Bridge
         navigate(`/auth-redirect?portal=${portal}`, { replace: true });
       }
     }
@@ -117,28 +117,11 @@ const PortalLogin = ({ portal }) => {
 
   // If already signed in, show a loading state while the useEffect redirects
   if (clerkLoaded && isSignedIn) {
-    if (user) {
-      return (
-        <div style={{ minHeight: "100vh", background: "#060608", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-            style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%' }} 
-          />
-        </div>
-      );
-    }
-    
-    // Signed in but no profile yet (Handshake needed)
     return (
-      <div style={{ minHeight: "100vh", background: "#060608", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
-        <motion.div 
-          animate={{ rotate: 360 }} 
-          transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-          style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%', marginBottom: '24px' }} 
+      <div style={{ minHeight: "100vh", background: "#060608", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+          style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%' }} 
         />
-        <div style={{ textAlign: 'center' }}>
-          <h2 style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 800 }}>Synchronizing Portal</h2>
-          <p style={{ color: '#888', marginTop: '10px' }}>Initializing security handshake for your {portalName} account...</p>
-        </div>
       </div>
     );
   }

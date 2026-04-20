@@ -3,13 +3,14 @@ import { useNavigate, Link, useLocation } from "react-router-dom";
 import { useEvents } from "../context/EventContext";
 import { motion } from "framer-motion";
 import { UserPlus, Mail, KeyRound, Type, ArrowRight } from "lucide-react";
+import api from "../api";
 
 function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
-  const { register, apiUrl } = useEvents();
+  const { register } = useEvents();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -24,12 +25,8 @@ function Register() {
   const handleRegister = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`${apiUrl}/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, role })
-      });
-      const data = await response.json();
+      const response = await api.post('/register', { name, email, role });
+      const data = response.data;
       if (data.success) {
         alert("Registration successful! Please login.");
         navigate(role === 'admin' ? "/admin-login" : "/user-login");

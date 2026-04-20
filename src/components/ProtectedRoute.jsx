@@ -8,11 +8,11 @@ import { useEffect, useState } from 'react';
  * Checks for BOTH successful Clerk auth AND the correct activePortal in sessionStorage.
  */
 const ProtectedRoute = ({ children, requiredPortal }) => {
-  const { user, isLoaded: clerkLoaded, authLoading, handshakeFailed, isSignedIn } = useEvents();
+  const { user, clerkLoaded, authLoading, isSignedIn } = useEvents();
   const location = useLocation();
   const [activePortal, setActivePortal] = useState(sessionStorage.getItem('activePortal'));
 
-  // Sync portal state from session storage on ogni route change
+  // Sync portal state from session storage on every route change
   useEffect(() => {
     setActivePortal(sessionStorage.getItem('activePortal'));
   }, [location.pathname]);
@@ -33,15 +33,7 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     return <Navigate to={`/${requiredPortal}/login`} state={{ from: location }} replace />;
   }
 
-  // 3. Handshake Failure Guard
-  // If the security handshake previously failed, DO NOT redirect back to it.
-  // This breaks the infinite flicker loop.
-  if (handshakeFailed) {
-    console.warn('[ProtectedRoute] Handshake failed previously. Staying on current page/login.');
-    return <Navigate to={`/${requiredPortal}/login?error=handshake_failed`} replace />;
-  }
-
-  // 4. Portal Isolation Check
+  // 3. Portal Isolation Check
   // Check if they are in the wrong portal session
   if (requiredPortal && activePortal && activePortal !== requiredPortal) {
     console.warn(`[PortalGuard] Portal mismatch. Current: ${activePortal}, Required: ${requiredPortal}`);
@@ -49,16 +41,11 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     return <Navigate to={`/${requiredPortal}/login`} replace />;
   }
 
-  // 5. Missing Profile Check
-  // If signed in but no profile exists in context yet
+  // 4. Missing Profile Check
+  // If signed in but no profile exists in context yet, send to the redirect bridge
   if (!user) {
-    console.warn('[ProtectedRoute] Signed in but no profile found. Handshake might be required.');
-    // If we have no activePortal, we MUST go to login to pick one
-    if (!activePortal) {
-      return <Navigate to={`/${requiredPortal}/login`} replace />;
-    }
-    // Only redirect to handshake if it HASN'T failed yet
-    return <Navigate to={`/auth-redirect?portal=${activePortal}`} replace />;
+    console.warn('[ProtectedRoute] Signed in but no profile found. Redirecting to auth bridge.');
+    return <Navigate to={`/auth-redirect?portal=${requiredPortal}`} replace />;
   }
 
   return children;

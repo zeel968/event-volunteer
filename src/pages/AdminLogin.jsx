@@ -3,13 +3,14 @@ import { useNavigate, Link } from "react-router-dom";
 import { useEvents } from "../context/EventContext";
 import { motion } from "framer-motion";
 import { ShieldAlert, Mail, KeyRound, ArrowRight, Loader2 } from "lucide-react";
+import api from "../api";
 
 function AdminLogin() {
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const { login, signInWithGoogle, user, apiUrl } = useEvents();
+  const { login, signInWithGoogle, user } = useEvents();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -22,15 +23,10 @@ function AdminLogin() {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/send-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
-      });
-      const data = await response.json();
+      const response = await api.post('/send-otp', { email });
+      const data = response.data;
       if (data.success) {
         if (data.devMode) {
-          // Auto-fill OTP in Dev mode seamlessly
           setOtp(data.otp);
           console.log("[Dev Mode] Ethereal Preview:", data.previewUrl);
         }
@@ -48,16 +44,14 @@ function AdminLogin() {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/verify-otp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, otp })
-      });
-      const data = await response.json();
+      const response = await api.post('/verify-otp', { email, otp });
+      const data = response.data;
       if (data.success) {
-        setToken(data.token);
-        setUser(data.user);
-        navigate(data.user.role === "admin" ? "/organizer" : "/volunteer");
+        if (await login(email, 'admin', data.token)) {
+          navigate("/organizer");
+        } else {
+          alert("Login failed on frontend.");
+        }
       } else {
         alert(data.error || "Invalid OTP");
       }
