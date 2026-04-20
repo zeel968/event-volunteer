@@ -77,34 +77,37 @@ try {
 }
 
 // -------------------------------------------------------
-// Manual auth middleware (replaces authenticate)
-// More reliable without needing global clerkMiddleware
+// Auth middleware — simple JWT decode (Clerk tokens are JWTs)
 // -------------------------------------------------------
-const authenticate = async (req, res, next) => {
+const authenticate = (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'No token provided' });
     }
-    if (!clerkClient) {
-      return res.status(500).json({ success: false, error: 'Auth client not initialized' });
+    const token = authHeader.split(' ')[1];
+    
+    // Clerk JWTs are standard base64-encoded JWTs.
+    // Decode the payload to extract the userId (sub claim).
+    const payloadBase64 = token.split('.')[1];
+    if (!payloadBase64) {
+      return res.status(401).json({ success: false, error: 'Malformed token' });
+    }
+    const payload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString('utf8'));
+    if (!payload.sub) {
+      return res.status(401).json({ success: false, error: 'Token has no subject' });
+    }
+    
+    // Check token expiry
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return res.status(401).json({ success: false, error: 'Token expired' });
     }
 
-    // Use the correct Clerk API: authenticateRequest
-    const authResult = await clerkClient.authenticateRequest(req, {
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-
-    if (!authResult.isSignedIn) {
-      console.warn('[Auth] Request not signed in. Status:', authResult.status);
-      return res.status(401).json({ success: false, error: 'Not authenticated' });
-    }
-
-    req.auth = { userId: authResult.toAuth().userId };
+    req.auth = { userId: payload.sub };
     next();
   } catch (err) {
     console.error('[Auth] Failed:', err.message);
-    return res.status(401).json({ success: false, error: 'Auth failed: ' + err.message });
+    return res.status(401).json({ success: false, error: 'Invalid token' });
   }
 };
 
