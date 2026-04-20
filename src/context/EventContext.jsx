@@ -11,31 +11,8 @@ export const useEvents = () => useContext(EventContext);
 export const EventProvider = ({ children }) => {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
   const { getToken } = useAuth();
-  const hasHydrated = useRef(false);
-
-  // --- API MANAGEMENT ---
-  const [apiUrl, setApiUrl] = useState(() => {
-    const saved = localStorage.getItem('custom_api_url');
-    return saved || import.meta.env.VITE_API_BASE_URL || 'https://web-production-ce51a.up.railway.app/api';
-  });
-
-  const updateApiUrl = (newUrl) => {
-    let sanitized = newUrl.trim();
-    if (!sanitized.startsWith('http')) sanitized = 'https://' + sanitized;
-    if (sanitized.endsWith('/')) sanitized = sanitized.slice(0, -1);
-    if (!sanitized.endsWith('/api')) sanitized += '/api';
-
-    localStorage.setItem('custom_api_url', sanitized);
-    setApiUrl(sanitized);
-    api.defaults.baseURL = sanitized; 
-    window.location.reload();
-  };
-
-  useEffect(() => {
-    api.defaults.baseURL = apiUrl;
-  }, [apiUrl]);
-  // ------------------------------
-
+  
+  // Basic State
   const [events, setEvents] = useState(() => {
     const saved = localStorage.getItem('app_events');
     return saved ? JSON.parse(saved) : mockEventsData;
@@ -44,129 +21,69 @@ export const EventProvider = ({ children }) => {
     const saved = localStorage.getItem('app_applications');
     return saved ? JSON.parse(saved) : [];
   });
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('app_current_user');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [user, setUser] = useState(null); // This is the Supabase Profile
   const [authLoading, setAuthLoading] = useState(true);
   const [notifications, setNotifications] = useState(() => {
     const saved = localStorage.getItem('app_notifications');
     return saved ? JSON.parse(saved) : [];
   });
 
+  // Persists
   useEffect(() => { localStorage.setItem('app_events', JSON.stringify(events)); }, [events]);
   useEffect(() => { localStorage.setItem('app_applications', JSON.stringify(applications)); }, [applications]);
-  useEffect(() => { localStorage.setItem('app_current_user', JSON.stringify(user)); }, [user]);
   useEffect(() => { localStorage.setItem('app_notifications', JSON.stringify(notifications)); }, [notifications]);
 
   /**
-   * Centralized Auth Verification
-   * Replaces the old "Security Handshake"
+   * Sync Profile Logic
+   * Automatically fetches or creates a Supabase profile for the Clerk user.
    */
-  const checkAuth = async () => {
+  useEffect(() => {
+    if (!clerkLoaded) return;
+
     if (!isSignedIn) {
       setUser(null);
-      localStorage.removeItem('clerk-db-session');
       setAuthLoading(false);
       return;
     }
 
-    try {
-      const token = await getToken();
-      if (!token) throw new Error('No session token');
-      
-      // Store token for Axios interceptor
-      localStorage.setItem('clerk-db-session', token);
-
-      // Call the simplified verification endpoint
-      const response = await api.get('/auth/verify');
-      if (response.data.success) {
-        setUser(response.data.user);
-      } else {
-        throw new Error('Verification failed');
-      }
-    } catch (err) {
-      console.error('[AuthCheck] JWT Verification Failed:', err.message);
-      setUser(null);
-      localStorage.removeItem('clerk-db-session');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // Run verification on app load / auth change
-  useEffect(() => {
-    if (clerkLoaded) {
-      checkAuth();
-    }
-  }, [clerkLoaded, isSignedIn]);
-
-  // Synchronize browser state to backend if logged in
-  useEffect(() => {
-    if (!clerkLoaded || !isSignedIn || hasHydrated.current || authLoading) return;
-
-    const hydrateBackend = async () => {
-      console.log('[Sync] Hydrating backend with local data...');
-      
+    const syncProfile = async () => {
       try {
-        // Sync events
-        for (const event of events) {
-          await api.post('/events', event).catch(() => {});
+        setAuthLoading(true);
+        const { data: profile } = await api.get('/profile');
+        if (profile) {
+          setUser(profile);
         }
-
-        // Sync applications
-        if (applications.length > 0) {
-          await api.post('/sync-applications', { updatedApps: applications }).catch(() => {});
-        }
-
-        hasHydrated.current = true;
-        console.log('[Sync] Backend hydration complete.');
       } catch (err) {
-        console.error('[Sync] Hydration failed:', err);
+        console.error('[Sync] Profile sync failed:', err);
+      } finally {
+        setAuthLoading(false);
       }
     };
 
-    hydrateBackend();
-  }, [clerkLoaded, isSignedIn, authLoading]);
-
-  const login = async (email, role, token) => {
-    if (token) {
-        localStorage.setItem('clerk-db-session', token);
-        const response = await api.get('/auth/verify').catch(() => null);
-        if (response?.data?.success) {
-            setUser(response.data.user);
-            return true;
-        }
-    }
-    return false;
-  };
+    syncProfile();
+  }, [clerkLoaded, isSignedIn]);
 
   const logout = async () => {
-    localStorage.removeItem('clerk-db-session');
-    localStorage.removeItem('session_token');
     sessionStorage.removeItem('activePortal');
     setUser(null);
   };
 
+  // Helper for manual role switching/setting if needed
   const setRole = async (role) => {
-    if (!clerkUser) return { success: false, error: 'Not authenticated' };
-    
+    if (!isSignedIn) return { success: false, error: 'Not authenticated' };
     try {
-      const email = clerkUser.primaryEmailAddress ? clerkUser.primaryEmailAddress.emailAddress : clerkUser.emailAddresses[0].emailAddress;
-      const name = clerkUser.fullName || email.split('@')[0];
-
-      const response = await api.post('/register', { name, email, role, clerkId: clerkUser.id });
+      const response = await api.post('/profile', { role });
       if (response.data.success) {
-        await checkAuth();
+        setUser(response.data.profile);
         return { success: true };
       }
       return { success: false, error: response.data.error };
     } catch (err) {
-      console.error('Set role error:', err);
-      return { success: false, error: 'Network error' };
+      return { success: false, error: 'Sync failed' };
     }
   };
 
+  // Business Logic
   const startEvent = async (eventId) => {
     try {
       const response = await api.post(`/events/${eventId}/start`);
@@ -224,9 +141,8 @@ export const EventProvider = ({ children }) => {
 
   const savePaymentInfo = async (upiId) => {
     try {
-      const profileId = user ? user.id : clerkUser ? clerkUser.id : null;
-      const response = await api.post(`/profiles/${profileId}/payment-info`, { upi_id: upiId });
-      if (response.data.success) setUser(prev => ({ ...prev, upi_id: upiId }));
+      const response = await api.post('/profile', { upi_id: upiId });
+      if (response.data.success) setUser(response.data.profile);
       return response.data;
     } catch (error) { return { success: false, error: 'Network error' }; }
   };
@@ -239,10 +155,7 @@ export const EventProvider = ({ children }) => {
     const id = Date.now();
     const eventWithId = { ...newEvent, id, organizerEmail: user?.email };
     setEvents([...events, eventWithId]);
-
-    if (isSignedIn) {
-      await api.post('/events', eventWithId).catch(err => console.error('[Sync] Failed to sync event:', err));
-    }
+    if (isSignedIn) await api.post('/events', eventWithId).catch(() => {});
   };
 
   const applyToEvent = async (eventId, userDetails) => {
@@ -252,10 +165,7 @@ export const EventProvider = ({ children }) => {
       status: 'Pending', appliedAt: new Date().toISOString()
     };
     setApplications([...applications, newApplication]);
-
-    if (isSignedIn) {
-        await api.post('/applications', newApplication).catch(err => console.error('[Sync] Failed to sync application:', err));
-    }
+    if (isSignedIn) await api.post('/applications', newApplication).catch(() => {});
   };
 
   const updateApplicationStatus = async (applicationId, newStatus) => {
@@ -281,10 +191,6 @@ export const EventProvider = ({ children }) => {
       }
       return app;
     }));
-
-    if (isSignedIn && updatedApp) {
-        await api.post('/sync-applications', { updatedApps: [updatedApp] }).catch(err => console.error('[Sync] Failed to sync application status:', err));
-    }
   };
 
   const fetchProfilesByEmails = async (emails) => {
@@ -302,13 +208,12 @@ export const EventProvider = ({ children }) => {
     <EventContext.Provider value={{
       events, applications, user, authLoading, notifications,
       clerkLoaded, isSignedIn, clerkUser,
-      login, logout, setRole,
+      logout, setRole,
       markNotificationAsRead, addEvent,
       applyToEvent, updateApplicationStatus,
       startEvent, finishEvent, markAttendance,
       createPayment, payAll, confirmPayment, savePaymentInfo,
-      fetchProfilesByEmails,
-      apiUrl, updateApiUrl
+      fetchProfilesByEmails
     }}>
       {children}
     </EventContext.Provider>

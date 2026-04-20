@@ -12,7 +12,6 @@ import UserProfile from './pages/UserProfile';
 import OrganizerProfile from './pages/OrganizerProfile';
 import EventAttendance from './pages/EventAttendance';
 import PaymentDashboard from './pages/PaymentDashboard';
-import AuthRedirect from './pages/AuthRedirect';
 
 import { EventProvider } from './context/EventContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -36,9 +35,6 @@ function App() {
           {/* Shared Tools */}
           <Route path="/browse" element={<BrowseEvents />} />
           <Route path="/map" element={<MapSearch />} />
-
-          {/* Auth Bridge */}
-          <Route path="/auth-redirect" element={<AuthRedirect />} />
 
           {/* Organizer Portal (Protected) */}
           <Route path="/organizer/dashboard" element={
