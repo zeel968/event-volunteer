@@ -52,7 +52,7 @@ function AuthRedirect() {
         try {
           // SYNC PROFILE: Notify backend about the current session
           const token = await window.Clerk.session.getToken();
-          await fetch(API_BASE_URL + '/register', {
+          const response = await fetch(API_BASE_URL + '/register', {
             method: 'POST',
             headers: { 
               'Content-Type': 'application/json',
@@ -65,6 +65,20 @@ function AuthRedirect() {
             })
           });
 
+          if (!response.ok) {
+            const errorText = await response.text();
+            // If we get HTML back, it means the API route is misconfigured (likely Vercel index.html rewrite)
+            if (errorText.includes('<!DOCTYPE html>') || errorText.includes('<html')) {
+              throw new Error('API Route Mismatch: The server returned HTML instead of JSON. Please check your Vercel rewrites or VITE_API_BASE_URL.');
+            }
+            throw new Error(`Server responded with ${response.status}: ${errorText}`);
+          }
+
+          const data = await response.json();
+          if (!data.success) {
+            throw new Error(data.error || 'Registration failed on server.');
+          }
+
           // LOCK THE PORTAL (Source of truth for ProtectedRoute)
           sessionStorage.setItem('activePortal', activePortal);
           
@@ -76,15 +90,20 @@ function AuthRedirect() {
           }, 600);
           
         } catch (err) {
-          console.error('[AuthRedirect] Handshake sync failed, proceeding with local session:', err);
-          sessionStorage.setItem('activePortal', activePortal);
-          navigate(activePortal === 'organizer' ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
+          console.error('[AuthRedirect] Handshake sync failed:', err);
+          setStatus(`Handshake Error: ${err.message}`);
+          
+          // CRITICAL: Stop the loop. Don't navigate automatically if it failed.
+          // Let the user see the error or stay on this page.
+          // If we proceed with local session, it might loop if ProtectedRoute rejects it.
+          // sessionStorage.setItem('activePortal', activePortal);
+          // navigate(activePortal === 'organizer' ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
         }
       }
     };
 
     finalizeAuth();
-  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser]);
+  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser, API_BASE_URL]);
 
   return (
     <div style={{ minHeight: '100vh', background: '#060608', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '30px' }}>
@@ -94,18 +113,30 @@ function AuthRedirect() {
         style={{ position: 'relative' }}
       >
          <motion.div 
-           animate={{ rotate: 360 }} 
+           animate={!status.includes('Error') ? { rotate: 360 } : {}} 
            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-           style={{ width: '100px', height: '100px', border: '2px solid rgba(0,229,255,0.05)', borderTop: '2px solid #00e5ff', borderRadius: '50%' }} 
+           style={{ width: '100px', height: '100px', border: '2px solid rgba(0,229,255,0.05)', borderTop: `2px solid ${status.includes('Error') ? '#ff4d4d' : '#00e5ff'}`, borderRadius: '50%' }} 
          />
-         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#00e5ff' }}>
-            <Zap size={36} className="animate-pulse" />
+         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: status.includes('Error') ? '#ff4d4d' : '#00e5ff' }}>
+            {status.includes('Error') ? <ShieldCheck size={36} /> : <Zap size={36} className="animate-pulse" />}
          </div>
       </motion.div>
       <div style={{ textAlign: 'center', maxWidth: '400px', padding: '0 20px' }}>
-        <h2 style={{ color: '#fff', fontSize: '1.6rem', fontWeight: 800, marginBottom: '12px', letterSpacing: '-0.5px' }}>Security Handshake</h2>
-        <p style={{ color: '#888', fontSize: '1rem', lineHeight: 1.5 }}>{status}</p>
+        <h2 style={{ color: '#fff', fontSize: '1.6rem', fontWeight: 800, marginBottom: '12px', letterSpacing: '-0.5px' }}>
+          {status.includes('Error') ? 'Handshake Failed' : 'Security Handshake'}
+        </h2>
+        <p style={{ color: status.includes('Error') ? '#ff4d4d' : '#888', fontSize: '1rem', lineHeight: 1.5 }}>{status}</p>
+        
+        {status.includes('Error') && (
+          <button 
+            onClick={() => { syncAttempted.current = false; setStatus('Retrying handshake...'); }}
+            style={{ marginTop: '20px', padding: '10px 20px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', borderRadius: '10px', cursor: 'pointer' }}
+          >
+            Retry Handshake
+          </button>
+        )}
       </div>
+
       
       <style>{`
         .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }

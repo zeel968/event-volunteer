@@ -42,6 +42,21 @@ export const EventProvider = ({ children }) => {
       const response = await fetch(API_BASE_URL + '/profile', {
         headers: { 'Authorization': 'Bearer ' + clerkToken }
       });
+      
+      if (!response.ok) {
+         console.warn(`[Sync] Profile fetch failed with status: ${response.status}`);
+         return null;
+      }
+
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        if (text.includes("<!DOCTYPE html>")) {
+           console.error("[Sync] Critical: Server returned HTML instead of JSON. Check VITE_API_BASE_URL and Vercel rewrites.");
+        }
+        return null;
+      }
+
       const data = await response.json();
       if (data.success) {
         if (data.sessionToken) {

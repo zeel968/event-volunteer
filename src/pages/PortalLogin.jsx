@@ -110,12 +110,30 @@ const PortalLogin = ({ portal }) => {
   };
 
   // If already signed in, show a loading state while the useEffect redirects
-  if (clerkLoaded && isSignedIn && user) {
+  if (clerkLoaded && isSignedIn) {
+    if (user) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#060608", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+            style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%' }} 
+          />
+        </div>
+      );
+    }
+    
+    // Signed in but no profile yet (Handshake needed)
     return (
-      <div style={{ minHeight: "100vh", background: "#060608", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-          style={{ width: '60px', height: '60px', border: '2px solid rgba(0,229,255,0.1)', borderTop: `2px solid ${themeColor}`, borderRadius: '50%' }} 
-        />
+      <div style={{ minHeight: "100vh", background: "#060608", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+          <h2 style={{ color: '#fff', fontSize: '1.4rem' }}>Session Detected</h2>
+          <p style={{ color: '#888', marginTop: '10px' }}>Your account is signed in, but we need to synchronize your {portalName} portal.</p>
+        </div>
+        <button 
+          onClick={() => navigate(`/auth-redirect?portal=${portal}`)}
+          style={{ background: themeColor, color: '#000', padding: '12px 24px', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}
+        >
+          Initialize Security Handshake
+        </button>
       </div>
     );
   }

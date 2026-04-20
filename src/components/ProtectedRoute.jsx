@@ -17,35 +17,40 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     setActivePortal(sessionStorage.getItem('activePortal'));
   }, [location.pathname]);
 
+  // 1. Loading State
   if (!clerkLoaded || authLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a0b' }}>
+      <div style={{ minHeight: '100vh', background: '#0a0a0b', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px' }}>
         <Loader2 className="animate-spin" size={48} style={{ color: 'var(--accent-primary)' }} />
+        <p style={{ color: '#888', fontSize: '0.9rem' }}>Verifying security session...</p>
       </div>
     );
   }
 
-  // 1. Core Auth Check (Clerk)
+  // 2. Not Signed In (Clerk)
   if (!isSignedIn) {
-    // If not signed in, go back to the SPECIFIC login page for this route
+    console.log('[ProtectedRoute] User not signed in. Redirecting to login.');
     return <Navigate to={`/${requiredPortal}/login`} state={{ from: location }} replace />;
   }
 
-  // 2. Profile Sync Check
-  if (!user) {
-    // This handles the transition/sync phase. 
-    // We don't redirect to /auth-redirect anymore; we stay on portal login or handle sync in context.
-    // For simplicity with 'Separate URLs', we'll redirect back to login if no profile exists.
+  // 3. Profile Isolation Check (Technique 1 requirement)
+  // Check if they are in the wrong portal session
+  if (requiredPortal && activePortal && activePortal !== requiredPortal) {
+    console.warn(`[PortalGuard] Portal mismatch. Current: ${activePortal}, Required: ${requiredPortal}`);
+    // Boot them back to the login page of the PORTAL they are trying to access
     return <Navigate to={`/${requiredPortal}/login`} replace />;
   }
 
-  // 3. Portal Isolation Check (Technique 1 requirement)
-  // If user is logged into Clerk but activePortal doesn't match the route's requirement,
-  // we treat them as unauthorized for THIS specific portal.
-  if (requiredPortal && activePortal !== requiredPortal) {
-    console.warn(`[PortalGuard] Access denied. Current: ${activePortal}, Required: ${requiredPortal}`);
-    // Boot them back to the login page of the PORTAL they are trying to access
-    return <Navigate to={`/${requiredPortal}/login`} replace />;
+  // 4. Missing Profile Check
+  // If signed in but no profile exists in context yet
+  if (!user) {
+    console.warn('[ProtectedRoute] Signed in but no profile found. Handshake might be required.');
+    // If we have no activePortal, we MUST go to login to pick one
+    if (!activePortal) {
+      return <Navigate to={`/${requiredPortal}/login`} replace />;
+    }
+    // If we have an activePortal but no profile, redirect to handshake
+    return <Navigate to={`/auth-redirect?portal=${activePortal}`} replace />;
   }
 
   return children;
