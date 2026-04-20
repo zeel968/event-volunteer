@@ -9,11 +9,11 @@ import { motion } from 'framer-motion';
  * Preserves the portal intent passed from PortalLogin with high stability.
  */
 function AuthRedirect() {
-  const { authLoading, clerkLoaded, isSignedIn, clerkUser, setHandshakeFailed } = useEvents();
+  const { authLoading, clerkLoaded, isSignedIn, clerkUser, setHandshakeFailed, apiUrl, updateApiUrl } = useEvents();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [status, setStatus] = useState('Initiating security handshake...');
-  const [debugUrl, setDebugUrl] = useState(import.meta.env.VITE_API_BASE_URL || '/api');
+  const [tempUrl, setTempUrl] = useState(apiUrl);
   const [showDebug, setShowDebug] = useState(false);
   const syncAttempted = useRef(false);
 
@@ -29,12 +29,12 @@ function AuthRedirect() {
         const portalIntent = searchParams.get('portal');
         const activePortal = portalIntent || sessionStorage.getItem('activePortal') || 'volunteer';
         
-        console.log(`[AuthRedirect] Portal Intent: ${activePortal} | Target API: ${debugUrl}`);
+        console.log(`[AuthRedirect] Portal Intent: ${activePortal} | Target API: ${apiUrl}`);
         setStatus(`Synchronizing ${activePortal} profile...`);
 
         try {
           const token = await window.Clerk.session.getToken();
-          const response = await fetch(`${debugUrl}/register`, {
+          const response = await fetch(`${apiUrl}/register`, {
             method: 'POST',
             headers: { 
               'Content-Type': 'application/json',
@@ -49,9 +49,13 @@ function AuthRedirect() {
 
           if (!response.ok) {
             const errorText = await response.text();
-            if (errorText.includes('<!DOCTYPE html>') || errorText.includes('<html')) {
-              throw new Error(`API Route Mismatch: The server at [${debugUrl}] returned HTML (likely your own index.html). This usually means your VITE_API_BASE_URL is wrong or Vercel is redirecting API calls back to the frontend.`);
+            
+            // AUTOMATIC HEALING: If we see a 405 or 404 on the Vercel Domain, we KNOW it's a config issue
+            if (response.status === 405 || response.status === 404 || errorText.includes('<!DOCTYPE html>')) {
+              setShowDebug(true); // Automatically show the fix-it box
+              throw new Error(`Connection Mismatch (405): You are currently trying to talk to the Backend at [${apiUrl}]. Since your backend is on Railway, this URL is likely incorrect. Please enter your FULL Railway URL below.`);
             }
+            
             throw new Error(`Server responded with ${response.status}: ${errorText}`);
           }
 
@@ -74,7 +78,7 @@ function AuthRedirect() {
     };
 
     finalizeAuth();
-  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser, debugUrl, setHandshakeFailed]);
+  }, [clerkLoaded, authLoading, isSignedIn, navigate, searchParams, clerkUser, apiUrl, setHandshakeFailed]);
 
   return (
     <div style={{ minHeight: '100vh', background: '#060608', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '30px' }}>
@@ -82,58 +86,62 @@ function AuthRedirect() {
          <motion.div 
            animate={!status.includes('Error') ? { rotate: 360 } : {}} 
            transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-           style={{ width: '100px', height: '100px', border: '2px solid rgba(0,229,255,0.05)', borderTop: `2px solid ${status.includes('Error') ? '#ff4d4d' : '#00e5ff'}`, borderRadius: '50%' }} 
+           style={{ width: '100px', height: '100px', border: '2px solid rgba(0,229,255,0.05)', borderTop: `2px solid ${status.includes('Handshake Error') ? '#ff4d4d' : '#00e5ff'}`, borderRadius: '50%' }} 
          />
-         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: status.includes('Error') ? '#ff4d4d' : '#00e5ff' }}>
-            {status.includes('Error') ? <ShieldCheck size={36} /> : <Zap size={36} className="animate-pulse" />}
+         <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: status.includes('Handshake Error') ? '#ff4d4d' : '#00e5ff' }}>
+            {status.includes('Handshake Error') ? <ShieldCheck size={36} /> : <Zap size={36} className="animate-pulse" />}
          </div>
       </motion.div>
 
       <div style={{ textAlign: 'center', maxWidth: '500px', padding: '0 20px' }}>
-        <h2 style={{ color: '#fff', fontSize: '1.6rem', fontWeight: 800, marginBottom: '12px' }}>
-          {status.includes('Error') ? 'Handshake Failed' : 'Security Handshake'}
+        <h2 style={{ color: '#fff', fontSize: '1.8rem', fontWeight: 800, marginBottom: '12px', letterSpacing: '-0.5px' }}>
+          {status.includes('Handshake Error') ? 'Connection Issue Found' : 'Security Handshake'}
         </h2>
-        <p style={{ color: status.includes('Error') ? '#ff4d4d' : '#888', fontSize: '0.9rem', lineHeight: 1.6, background: status.includes('Error') ? 'rgba(255,0,0,0.1)' : 'transparent', padding: '10px', borderRadius: '8px' }}>
+        <p style={{ color: status.includes('Handshake Error') ? '#ff4d4d' : '#888', fontSize: '0.95rem', lineHeight: 1.6, background: status.includes('Handshake Error') ? 'rgba(255,0,0,0.05)' : 'transparent', padding: '15px', borderRadius: '12px', border: status.includes('Handshake Error') ? '1px solid rgba(255,0,0,0.1)' : 'none' }}>
           {status}
         </p>
         
-        {status.includes('Error') && (
-          <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px', justifyContent: 'center' }}>
+        {status.includes('Handshake Error') && (
+          <div style={{ marginTop: '25px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
             <button 
               onClick={() => { syncAttempted.current = false; setStatus('Retrying handshake...'); setHandshakeFailed(false); }}
-              style={{ padding: '12px 24px', background: '#fff', color: '#000', borderRadius: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer' }}
+              style={{ padding: '14px 28px', background: '#fff', color: '#000', borderRadius: '14px', fontWeight: '800', border: 'none', cursor: 'pointer', transition: 'transform 0.2s' }}
             >
-              Retry Handshake
+              Try Again
             </button>
             <button 
               onClick={() => setShowDebug(!showDebug)}
-              style={{ padding: '12px 24px', background: 'rgba(255,255,255,0.05)', color: '#888', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
+              style={{ padding: '14px 28px', background: 'rgba(255,255,255,0.05)', color: '#fff', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}
             >
-              {showDebug ? 'Hide Debug' : 'Debug API URL'}
+              {showDebug ? 'Close Fix Tool' : '🔧 Fix Connection'}
             </button>
           </div>
         )}
 
         {showDebug && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={{ marginTop: '30px', padding: '20px', background: '#111', borderRadius: '16px', border: '1px solid #222', textAlign: 'left' }}>
-            <p style={{ color: '#aaa', fontSize: '0.8rem', marginBottom: '10px' }}>Current Base URL: <code style={{color: '#00e5ff'}}>{debugUrl}</code></p>
+          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} style={{ marginTop: '40px', padding: '25px', background: 'rgba(255,255,255,0.02)', borderRadius: '24px', border: '1px solid rgba(0,229,255,0.2)', textAlign: 'left', backdropFilter: 'blur(20px)' }}>
+            <h3 style={{ color: '#00e5ff', fontSize: '1.1rem', marginBottom: '15px', fontWeight: 700 }}>Auto-Healing: Backend Config</h3>
+            <p style={{ color: '#aaa', fontSize: '0.85rem', marginBottom: '15px' }}>
+              Your frontend is currently pointing to <code style={{color: '#fff', background: '#222', padding: '2px 6px', borderRadius: '4px'}}>{apiUrl}</code>. 
+              <strong>Please enter your full Railway URL below:</strong>
+            </p>
             <div style={{ display: 'flex', gap: '10px' }}>
               <input 
                 type="text" 
                 placeholder="https://your-backend.railway.app/api" 
-                style={{ flex: 1, background: '#000', border: '1px solid #333', color: '#fff', padding: '10px', borderRadius: '8px', fontSize: '0.8rem' }}
-                value={debugUrl === '/api' ? '' : debugUrl}
-                onChange={(e) => setDebugUrl(e.target.value)}
+                style={{ flex: 1, background: '#000', border: '1px solid #333', color: '#fff', padding: '12px 16px', borderRadius: '12px', fontSize: '0.9rem', outline: 'none' }}
+                value={tempUrl === '/api' ? '' : tempUrl}
+                onChange={(e) => setTempUrl(e.target.value)}
               />
               <button 
-                onClick={() => { syncAttempted.current = false; setStatus('Attempting with new URL...'); setHandshakeFailed(false); }}
-                style={{ background: '#00e5ff', color: '#000', border: 'none', padding: '0 15px', borderRadius: '8px', fontWeight: 'bold' }}
+                onClick={() => { if(tempUrl) updateApiUrl(tempUrl); }}
+                style={{ background: '#00e5ff', color: '#000', border: 'none', padding: '0 20px', borderRadius: '12px', fontWeight: '900', cursor: 'pointer' }}
               >
-                Apply
+                APPLY & SYNC
               </button>
             </div>
-            <p style={{ marginTop: '10px', color: '#666', fontSize: '0.75rem' }}>
-              TIP: If you are on Vercel, relative paths like "/api" often fail. Try your full backend URL from Railway.
+            <p style={{ marginTop: '15px', color: '#666', fontSize: '0.8rem', fontStyle: 'italic' }}>
+              💡 This will save the URL in your browser and reload the page automatically.
             </p>
           </motion.div>
         )}

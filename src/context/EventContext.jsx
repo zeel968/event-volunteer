@@ -5,14 +5,28 @@ import { supabase } from '../supabaseClient';
 
 const EventContext = createContext();
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
-
 export const useEvents = () => useContext(EventContext);
 
 export const EventProvider = ({ children }) => {
   const { isLoaded: clerkLoaded, isSignedIn, user: clerkUser } = useUser();
   const { getToken } = useAuth();
   const hasHydrated = useRef(false);
+
+  // --- AUTO-HEALING API LOGIC ---
+  const [apiUrl, setApiUrl] = useState(() => {
+    // 1. Check localStorage for a custom fix
+    const saved = localStorage.getItem('custom_api_url');
+    // 2. Fallback to Environment Variable or default
+    return saved || import.meta.env.VITE_API_BASE_URL || '/api';
+  });
+
+  const updateApiUrl = (newUrl) => {
+    localStorage.setItem('custom_api_url', newUrl);
+    setApiUrl(newUrl);
+    // Reload to ensure all context and effects catch the change
+    window.location.reload();
+  };
+  // ------------------------------
 
   const [events, setEvents] = useState(() => {
     const saved = localStorage.getItem('app_events');
@@ -39,7 +53,7 @@ export const EventProvider = ({ children }) => {
 
   const syncProfile = async (clerkToken) => {
     try {
-      const response = await fetch(API_BASE_URL + '/profile', {
+      const response = await fetch(apiUrl + '/profile', {
         headers: { 'Authorization': 'Bearer ' + clerkToken }
       });
       
@@ -83,7 +97,7 @@ export const EventProvider = ({ children }) => {
       
       // Sync events
       for (const event of events) {
-        await fetch(API_BASE_URL + '/events', {
+        await fetch(apiUrl + '/events', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
           body: JSON.stringify(event)
@@ -92,7 +106,7 @@ export const EventProvider = ({ children }) => {
 
       // Sync applications
       if (applications.length > 0) {
-        await fetch(API_BASE_URL + '/sync-applications', {
+        await fetch(apiUrl + '/sync-applications', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
           body: JSON.stringify({ updatedApps: applications })
@@ -151,7 +165,7 @@ export const EventProvider = ({ children }) => {
       const email = clerkUser.primaryEmailAddress ? clerkUser.primaryEmailAddress.emailAddress : clerkUser.emailAddresses[0].emailAddress;
       const name = clerkUser.fullName || email.split('@')[0];
 
-      const response = await fetch(API_BASE_URL + '/register', {
+      const response = await fetch(apiUrl + '/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, role, clerkId: clerkUser.id })
@@ -171,7 +185,7 @@ export const EventProvider = ({ children }) => {
   const startEvent = async (eventId) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/events/' + eventId + '/start', {
+      const response = await fetch(apiUrl + '/events/' + eventId + '/start', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token }
       });
@@ -186,7 +200,7 @@ export const EventProvider = ({ children }) => {
   const finishEvent = async (eventId) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/events/' + eventId + '/finish', {
+      const response = await fetch(apiUrl + '/events/' + eventId + '/finish', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token }
       });
@@ -201,7 +215,7 @@ export const EventProvider = ({ children }) => {
   const markAttendance = async (eventId, applicationIds, status = 'Present') => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/events/' + eventId + '/mark-attendance', {
+      const response = await fetch(apiUrl + '/events/' + eventId + '/mark-attendance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ applicationIds, status })
@@ -217,7 +231,7 @@ export const EventProvider = ({ children }) => {
   const createPayment = async (amount, receipt, applicationId) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/payments/create', {
+      const response = await fetch(apiUrl + '/payments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ amount, receipt, applicationId })
@@ -229,7 +243,7 @@ export const EventProvider = ({ children }) => {
   const confirmPayment = async (paymentData) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/payments/verify', {
+      const response = await fetch(apiUrl + '/payments/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify(paymentData)
@@ -246,7 +260,7 @@ export const EventProvider = ({ children }) => {
   const payAll = async (payments) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
-      const response = await fetch(API_BASE_URL + '/payments/pay-all', {
+      const response = await fetch(apiUrl + '/payments/pay-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ payments })
@@ -259,7 +273,7 @@ export const EventProvider = ({ children }) => {
     const token = await getToken() || localStorage.getItem('auth_token');
     try {
       const profileId = user ? user.id : clerkUser ? clerkUser.id : null;
-      const response = await fetch(API_BASE_URL + '/profiles/' + profileId + '/payment-info', {
+      const response = await fetch(apiUrl + '/profiles/' + profileId + '/payment-info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ upi_id: upiId })
@@ -281,7 +295,7 @@ export const EventProvider = ({ children }) => {
 
     const token = await getToken() || localStorage.getItem('auth_token');
     if (token) {
-      await fetch(API_BASE_URL + '/events', {
+      await fetch(apiUrl + '/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify(eventWithId)
@@ -299,7 +313,7 @@ export const EventProvider = ({ children }) => {
 
     const token = await getToken() || localStorage.getItem('auth_token');
     if (token) {
-        await fetch(API_BASE_URL + '/applications', {
+        await fetch(apiUrl + '/applications', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
           body: JSON.stringify(newApplication)
@@ -333,7 +347,7 @@ export const EventProvider = ({ children }) => {
 
     const token = await getToken() || localStorage.getItem('auth_token');
     if (token && updatedApp) {
-        await fetch(API_BASE_URL + '/sync-applications', {
+        await fetch(apiUrl + '/sync-applications', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
             body: JSON.stringify({ updatedApps: [updatedApp] })
@@ -366,7 +380,8 @@ export const EventProvider = ({ children }) => {
       createPayment, payAll, confirmPayment, savePaymentInfo,
       fetchProfilesByEmails,
       handshakeFailed, setHandshakeFailed,
-      handshakeError, setHandshakeError
+      handshakeError, setHandshakeError,
+      apiUrl, updateApiUrl
     }}>
       {children}
     </EventContext.Provider>

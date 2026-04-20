@@ -9,7 +9,7 @@ function AdminLogin() {
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
-  const { login, signInWithGoogle, user } = useEvents();
+  const { login, signInWithGoogle, user, apiUrl } = useEvents();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -22,7 +22,7 @@ function AdminLogin() {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch("/api/send-otp", {
+      const response = await fetch(`${apiUrl}/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email })
@@ -48,7 +48,7 @@ function AdminLogin() {
     e.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch("/api/verify-otp", {
+      const response = await fetch(`${apiUrl}/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, otp })
