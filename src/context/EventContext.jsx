@@ -18,7 +18,7 @@ export const EventProvider = ({ children }) => {
       setTokenProvider(getToken);
     }
   }, [clerkLoaded, getToken]);
-  
+
   // Basic State
   const [events, setEvents] = useState(() => {
     const saved = localStorage.getItem('app_events');
@@ -28,7 +28,9 @@ export const EventProvider = ({ children }) => {
     const saved = localStorage.getItem('app_applications');
     return saved ? JSON.parse(saved) : [];
   });
-  const [user, setUser] = useState(null); // This is the Supabase Profile
+  
+  // Fail-safe: Initialize user state with Clerk data if available
+  const [user, setUser] = useState(null); 
   const [authLoading, setAuthLoading] = useState(true);
   const [notifications, setNotifications] = useState(() => {
     const saved = localStorage.getItem('app_notifications');
@@ -56,28 +58,39 @@ export const EventProvider = ({ children }) => {
     const syncProfile = async () => {
       try {
         setAuthLoading(true);
-        console.log('[Sync] Attempting to fetch profile from:', api.defaults.baseURL + '/profile');
+        console.log('[Sync] Attempting to fetch profile from backend...');
         const response = await api.get('/profile');
-        console.log('[Sync] Profile response:', response.data);
         if (response.data.success && response.data.profile) {
+          console.log('[Sync] Profile synced successfully:', response.data.profile);
           setUser(response.data.profile);
+        } else {
+          throw new Error('Backend sync returned success:false');
         }
       } catch (err) {
-        console.error('[Sync] Profile sync failed. Status:', err.response?.status, 'Data:', err.response?.data, 'Msg:', err.message);
+        console.warn('[Sync] Profile sync from backend failed. Using Clerk fallback.', err.message);
+        // Fallback: Populate user state with Clerk data so the app doesn't hang
+        if (clerkUser) {
+          setUser({
+            email: clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses[0].emailAddress,
+            name: clerkUser.fullName || clerkUser.firstName || 'User',
+            role: 'volunteer', // Default fallback role
+            id: clerkUser.id,
+            isFallback: true
+          });
+        }
       } finally {
         setAuthLoading(false);
       }
     };
 
     syncProfile();
-  }, [clerkLoaded, isSignedIn]);
+  }, [clerkLoaded, isSignedIn, clerkUser]);
 
   const logout = async () => {
     sessionStorage.removeItem('activePortal');
     setUser(null);
   };
 
-  // Helper for manual role switching/setting if needed
   const setRole = async (role) => {
     if (!isSignedIn) return { success: false, error: 'Not authenticated' };
     try {
@@ -88,11 +101,10 @@ export const EventProvider = ({ children }) => {
       }
       return { success: false, error: response.data.error };
     } catch (err) {
-      return { success: false, error: 'Sync failed' };
+      return { success: false, error: 'Role sync failed' };
     }
   };
 
-  // Business Logic
   const startEvent = async (eventId) => {
     try {
       const response = await api.post(`/events/${eventId}/start`);
@@ -100,7 +112,9 @@ export const EventProvider = ({ children }) => {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Live' } : e));
       }
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { 
+      return { success: false, error: error.response?.data?.error || 'Network error' }; 
+    }
   };
 
   const finishEvent = async (eventId) => {
@@ -110,7 +124,10 @@ export const EventProvider = ({ children }) => {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Finished' } : e));
       }
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { 
+      console.error('[EventFlow] Finish error:', error.response?.data || error.message);
+      return { success: false, error: error.response?.data?.error || 'Network error' }; 
+    }
   };
 
   const markAttendance = async (eventId, applicationIds, status = 'Present') => {

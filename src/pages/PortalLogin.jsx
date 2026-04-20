@@ -12,7 +12,8 @@ import { useEvents } from "../context/EventContext";
 const PortalLogin = ({ portal }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { clerkLoaded, isSignedIn, user } = useEvents();
+  const { clerkLoaded, isSignedIn } = useEvents(); 
+  // Note: We don't wait for 'user' (profile) here to prevent infinite loaders if sync is slow.
   
   const isSignUp = location.pathname.includes('register');
   const isOrganizer = portal === 'organizer';
@@ -21,11 +22,14 @@ const PortalLogin = ({ portal }) => {
   const portalName = isOrganizer ? "Organizer" : "Volunteer";
 
   useEffect(() => {
-    if (clerkLoaded && isSignedIn && user) {
+    // Fail-safe: If signed in, just go to the dashboard. 
+    // The profile sync will happen in the background inside EventContext.
+    if (clerkLoaded && isSignedIn) {
+      console.log(`[PortalLogin] Clerk is ready and signed in. Redirecting to ${portal} dashboard.`);
       sessionStorage.setItem('activePortal', portal);
       navigate(isOrganizer ? '/organizer/dashboard' : '/volunteer/dashboard', { replace: true });
     }
-  }, [clerkLoaded, isSignedIn, user, portal, navigate, isOrganizer]);
+  }, [clerkLoaded, isSignedIn, portal, navigate, isOrganizer]);
 
   const clerkProps = {
     routing: "path",
@@ -43,7 +47,8 @@ const PortalLogin = ({ portal }) => {
     }
   };
 
-  if (clerkLoaded && isSignedIn && !user) {
+  // Only show the loader if we are currently checking if the user is authenticated.
+  if (!clerkLoaded) {
      return (
         <div style={{ minHeight: "100vh", background: "#060608", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
