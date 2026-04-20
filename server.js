@@ -17,22 +17,6 @@ const razorpay = new Razorpay({
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 // -------------------------------------------------------
-// App & Middleware Setup
-// -------------------------------------------------------
-const app = express();
-app.use(clerkMiddleware()); 
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
-
-// Basic health check as requested
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
-
-// -------------------------------------------------------
 // CORS Configuration
 // -------------------------------------------------------
 const allowedOrigins = [
@@ -41,6 +25,8 @@ const allowedOrigins = [
   /\.vercel\.app$/,
   /vercel\.app$/
 ];
+
+const app = express();
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -59,6 +45,27 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
+// Request Logger
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
+app.use(clerkMiddleware()); 
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+
+// Basic health check as requested
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', env: { 
+    hasClerkKey: !!process.env.CLERK_SECRET_KEY,
+    hasSupabaseKey: !!process.env.SUPABASE_ANON_KEY 
+  }});
+});
+
 const PORT = process.env.PORT || 5000;
 
 // -------------------------------------------------------
@@ -70,19 +77,28 @@ const getRoleArray = (roleStr) => {
 };
 
 const getOrSyncProfile = async (auth) => {
-  if (!auth?.userId) return null;
+  if (!auth?.userId) {
+    console.warn('[Sync] No userId in auth object');
+    return null;
+  }
   try {
+    console.log('[Sync] Syncing profile for Clerk User:', auth.userId);
     const clerkUser = await clerkClient.users.getUser(auth.userId);
     const email = clerkUser.emailAddresses?.[0]?.emailAddress?.toLowerCase();
 
-    let { data: profile } = await supabase
+    console.log('[Sync] Found email in Clerk:', email);
+
+    let { data: profile, error: fetchError } = await supabase
       .from('profiles')
       .select('*')
       .eq('email', email)
       .maybeSingle();
 
+    if (fetchError) console.error('[Sync] Supabase Fetch Error:', fetchError);
+
     if (!profile) {
-      const { data: newProfile } = await supabase
+      console.log('[Sync] Profile missing in Supabase. Creating for:', email);
+      const { data: newProfile, error: insertError } = await supabase
         .from('profiles')
         .insert([{ 
           id: randomUUID(),
@@ -91,12 +107,16 @@ const getOrSyncProfile = async (auth) => {
           role: 'volunteer' 
         }])
         .select()
-        .single();
+        .maybeSingle();
+      
+      if (insertError) console.error('[Sync] Supabase Insert Error:', insertError);
       profile = newProfile;
     }
+    
+    console.log('[Sync] Final Profile Status:', profile ? 'Found/Created' : 'Failed');
     return profile;
   } catch (err) {
-    console.error('[Sync] Error syncing profile:', err);
+    console.error('[Sync] Fatal Error during sync:', err);
     return null;
   }
 };

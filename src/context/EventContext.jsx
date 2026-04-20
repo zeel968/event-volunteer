@@ -56,12 +56,14 @@ export const EventProvider = ({ children }) => {
     const syncProfile = async () => {
       try {
         setAuthLoading(true);
+        console.log('[Sync] Attempting to fetch profile from:', api.defaults.baseURL + '/profile');
         const response = await api.get('/profile');
+        console.log('[Sync] Profile response:', response.data);
         if (response.data.success && response.data.profile) {
           setUser(response.data.profile);
         }
       } catch (err) {
-        console.error('[Sync] Profile sync failed:', err);
+        console.error('[Sync] Profile sync failed. Status:', err.response?.status, 'Data:', err.response?.data, 'Msg:', err.message);
       } finally {
         setAuthLoading(false);
       }
