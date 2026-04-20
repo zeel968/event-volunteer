@@ -48,6 +48,10 @@ app.use(express.json());
 // -------------------------------------------------------
 // Health check — NO auth middleware, must respond first
 // -------------------------------------------------------
+// Root ping — absolutely zero dependencies, confirms server is alive at all
+app.get('/', (req, res) => res.send('Server is running'));
+app.get('/health', (req, res) => res.send('OK'));
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
