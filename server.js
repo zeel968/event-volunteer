@@ -3,42 +3,35 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
-import crypto, { randomInt, randomUUID } from 'crypto';
-import jwt from 'jsonwebtoken';
+import crypto, { randomUUID } from 'crypto';
 import Razorpay from 'razorpay';
-import { clerkMiddleware, requireAuth, createClerkClient } from '@clerk/express';
+import { requireAuth, createClerkClient } from '@clerk/express';
 import { supabase } from './supabase.js';
 
-// Global Environment Check
-if (!process.env.CLERK_SECRET_KEY) {
-  console.error('CRITICAL ERROR: CLERK_SECRET_KEY is not set in environment variables!');
-}
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || '',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
+// Catch any unhandled crashes so Railway logs show them clearly
+process.on('uncaughtException', (err) => {
+  console.error('[CRASH] Uncaught Exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] Unhandled Rejection:', reason);
 });
 
-const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+const app = express();
+const PORT = process.env.PORT || 5000;
 
 // -------------------------------------------------------
-// CORS Configuration (Must be at the top)
+// CORS — must be first
 // -------------------------------------------------------
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   /\.vercel\.app$/,
-  /vercel\.app$/
 ];
-
-const app = express();
 
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (allowedOrigins.some(pattern => 
-      pattern instanceof RegExp ? pattern.test(origin) : pattern === origin
-    )) {
+    if (allowedOrigins.some(p => p instanceof RegExp ? p.test(origin) : p === origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -47,280 +40,303 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
 }));
 
-// Request Logger
+app.use(express.json());
+
+// -------------------------------------------------------
+// Health check — NO auth middleware, must respond first
+// -------------------------------------------------------
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    node: process.version,
+    env: {
+      hasClerkKey: !!process.env.CLERK_SECRET_KEY,
+      hasSupabaseUrl: !!process.env.SUPABASE_URL,
+      hasSupabaseKey: !!process.env.SUPABASE_KEY,
+      hasRazorpayKey: !!process.env.RAZORPAY_KEY_ID,
+    }
+  });
+});
+
+// -------------------------------------------------------
+// Clerk client (server-side only)
+// -------------------------------------------------------
+let clerkClient = null;
+try {
+  clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+  console.log('[Clerk] Client initialized.');
+} catch (err) {
+  console.error('[Clerk] Failed to initialize client:', err.message);
+}
+
+// -------------------------------------------------------
+// Razorpay client
+// -------------------------------------------------------
+let razorpay = null;
+try {
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID || '',
+    key_secret: process.env.RAZORPAY_KEY_SECRET || '',
+  });
+  console.log('[Razorpay] Client initialized.');
+} catch (err) {
+  console.error('[Razorpay] Failed to initialize:', err.message);
+}
+
+// -------------------------------------------------------
+// Request logger
+// -------------------------------------------------------
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
-app.use(clerkMiddleware()); 
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
-
-// Basic health check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    env: { 
-      hasClerkKey: !!process.env.CLERK_SECRET_KEY,
-      hasSupabaseKey: !!process.env.SUPABASE_ANON_KEY 
-    }
-  });
-});
-
-const PORT = process.env.PORT || 5000;
-
 // -------------------------------------------------------
 // Helpers
 // -------------------------------------------------------
-const getRoleArray = (roleStr) => {
+const getRoles = (roleStr) => {
   if (!roleStr) return [];
+  if (Array.isArray(roleStr)) return roleStr;
   return roleStr.split(',').map(r => r.trim()).filter(Boolean);
 };
 
-const getOrSyncProfile = async (auth) => {
-  if (!auth?.userId) {
-    console.warn('[Sync] No userId in auth object');
-    return null;
-  }
+const syncProfile = async (userId) => {
+  if (!clerkClient || !userId) return null;
   try {
-    console.log('[Sync] Syncing profile for Clerk User:', auth.userId);
-    const clerkUser = await clerkClient.users.getUser(auth.userId);
+    const clerkUser = await clerkClient.users.getUser(userId);
     const email = clerkUser.emailAddresses?.[0]?.emailAddress?.toLowerCase();
+    if (!email) return null;
 
-    let { data: profile, error: fetchError } = await supabase
+    let { data: profile } = await supabase
       .from('profiles')
       .select('*')
       .eq('email', email)
       .maybeSingle();
 
     if (!profile) {
-      console.log('[Sync] Profile missing in Supabase. Creating for:', email);
-      const { data: newProfile, error: insertError } = await supabase
+      const { data: newProfile } = await supabase
         .from('profiles')
-        .insert([{ 
+        .insert([{
           id: randomUUID(),
-          email, 
+          email,
           name: clerkUser.fullName || email.split('@')[0],
-          role: 'volunteer' 
+          role: 'volunteer',
         }])
         .select()
         .maybeSingle();
-      
       profile = newProfile;
     }
-    
-    // Fail-safe: If DB lookup/creation fails, return a virtual profile based on Clerk data
+
+    // Fallback virtual profile if DB fails
     if (!profile) {
-      console.warn('[Sync] Database operations failed. Returning virtual profile.');
       return {
         email,
         name: clerkUser.fullName || email.split('@')[0],
         role: 'volunteer',
-        virtual: true
+        virtual: true,
       };
     }
-
     return profile;
   } catch (err) {
-    console.error('[Sync] Fatal Error during sync:', err);
+    console.error('[Sync] Error:', err.message);
     return null;
   }
 };
 
 // -------------------------------------------------------
-// Mock data for in-memory events/apps
+// In-memory data store
 // -------------------------------------------------------
-const events = [
-  { id: 1, title: 'Summer Festival 2026', status: 'Upcoming', organizerEmail: 'admin@example.com', stipend: 500 },
-  { id: 2, title: 'Tech Expo 2026', status: 'Live', organizerEmail: 'admin@example.com', stipend: 1000 }
-];
-const applications = [
-  { id: 1, eventId: 1, email: 'test@example.com', status: 'Approved', name: 'Test User' }
-];
+const events = [];
+const applications = [];
 const notifications = [];
 
 // -------------------------------------------------------
-// Protected Routes
+// Protected Routes — requireAuth() applied per-route
 // -------------------------------------------------------
 
-app.post('/api/events', requireAuth(), async (req, res) => {
-  const newEvent = req.body;
-  if (!newEvent.id || !newEvent.title) return res.status(400).json({ success: false, error: 'Invalid event data' });
-  events.push(newEvent);
-  res.json({ success: true });
-});
-
-app.post('/api/applications', requireAuth(), (req, res) => {
-  const newApp = req.body;
-  if (!newApp.id || !newApp.eventId) return res.status(400).json({ success: false, error: 'Invalid app data' });
-  applications.push(newApp);
-  res.json({ success: true });
-});
-
-app.post('/api/events/:eventId/mark-attendance', requireAuth(), async (req, res) => {
-  try {
-    const { eventId } = req.params;
-    const { applicationIds, status = 'Present' } = req.body; 
-    const profile = await getOrSyncProfile(req.auth);
-    
-    if (!profile || (!getRoleArray(profile.role).includes('organizer') && !getRoleArray(profile.role).includes('admin') && profile.role !== 'admin' && profile.role !== 'organizer')) {
-      return res.status(403).json({ success: false, error: 'Forbidden: Organizer access required.' });
-    }
-
-    applicationIds.forEach(appId => {
-      const idx = applications.findIndex(app => app.id === Number(appId) && app.eventId === Number(eventId));
-      if (idx !== -1) applications[idx].status = status;
-    });
-    return res.json({ success: true });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Server error' });
-  }
-});
-
-app.post('/api/events/end', requireAuth(), async (req, res) => {
-  try {
-    const { eventId } = req.body;
-    const profile = await getOrSyncProfile(req.auth);
-
-    const roles = getRoleArray(profile?.role);
-    if (!profile || (!roles.includes('organizer') && !roles.includes('admin') && !profile.virtual)) {
-      return res.status(403).json({ success: false, error: 'Forbidden: Organizer role required.' });
-    }
-    
-    const eventIndex = events.findIndex(e => e.id === Number(eventId));
-    if (eventIndex !== -1) {
-      events[eventIndex].status = 'Finished';
-      const presentApps = applications.filter(app => app.eventId === Number(eventId) && app.status === 'Present');
-      notifications.unshift(...presentApps.map(app => ({
-        id: Date.now() + Math.random(),
-        userEmail: app.email,
-        message: `Event "${events[eventIndex].title}" finished.`,
-        read: false,
-        timestamp: new Date().toISOString()
-      })));
-    }
-    return res.json({ success: true });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Server error' });
-  }
-});
-
-app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
-  // Keeping this for backward compatibility temporarily
-  try {
-    const { eventId } = req.params;
-    const eventIndex = events.findIndex(e => e.id === Number(eventId));
-    if (eventIndex !== -1) events[eventIndex].status = 'Finished';
-    return res.json({ success: true });
-  } catch (error) { return res.status(500).json({ success: false }); }
-});
-
+// Profile
 app.get('/api/profile', requireAuth(), async (req, res) => {
-  const profile = await getOrSyncProfile(req.auth);
-  if (!profile) return res.status(404).json({ success: false, error: 'Profile sync failed.' });
-  return res.json({ success: true, profile });
+  try {
+    const profile = await syncProfile(req.auth.userId);
+    if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
+    return res.json({ success: true, profile });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
+app.post('/api/profile', requireAuth(), async (req, res) => {
+  try {
+    const profile = await syncProfile(req.auth.userId);
+    if (!profile || profile.virtual) {
+      return res.status(404).json({ success: false, error: 'Profile not found in database' });
+    }
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(req.body)
+      .eq('id', profile.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ success: false, error: 'Update failed' });
+    return res.json({ success: true, profile: data });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Role switch
 app.post('/api/user/switch-role', requireAuth(), async (req, res) => {
   try {
     const { role } = req.body;
     if (!['organizer', 'volunteer'].includes(role)) {
       return res.status(400).json({ success: false, error: 'Invalid role' });
     }
-
-    // 1. Update Clerk Metadata
     await clerkClient.users.updateUserMetadata(req.auth.userId, {
-      publicMetadata: { role }
+      publicMetadata: { role },
     });
-
-    // 2. Sync to Supabase Profile for app logic consistency
-    const profile = await getOrSyncProfile(req.auth);
-    if (profile) {
-      await supabase
-        .from('profiles')
-        .update({ role })
-        .eq('id', profile.id);
+    const profile = await syncProfile(req.auth.userId);
+    if (profile && !profile.virtual) {
+      await supabase.from('profiles').update({ role }).eq('id', profile.id);
     }
-
     return res.json({ success: true, role });
-  } catch (error) {
-    console.error('[RoleSwitch] Failed:', error);
-    return res.status(500).json({ success: false, error: 'Failed to switch role' });
+  } catch (err) {
+    console.error('[RoleSwitch] Error:', err.message);
+    return res.status(500).json({ success: false, error: 'Role switch failed' });
   }
 });
 
-app.post('/api/profile', requireAuth(), async (req, res) => {
-  const profile = await getOrSyncProfile(req.auth);
-  if (!profile) return res.status(404).json({ success: false, error: 'Profile not found' });
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .update(req.body)
-    .eq('id', profile.id || req.auth.userId)
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ success: false, error: 'Update failed' });
-  return res.json({ success: true, profile: data });
+// Events
+app.post('/api/events', requireAuth(), async (req, res) => {
+  try {
+    const e = req.body;
+    if (!e.id || !e.title) return res.status(400).json({ success: false, error: 'Invalid event' });
+    if (!events.find(ev => ev.id === Number(e.id))) events.push(e);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// -------------------------------------------------------
-// Payment Routes (restored — these were missing!)
-// -------------------------------------------------------
+// End Event
+app.post('/api/events/end', requireAuth(), async (req, res) => {
+  try {
+    const { eventId } = req.body;
+    const profile = await syncProfile(req.auth.userId);
+    const roles = getRoles(profile?.role);
+    const isOrganizer = roles.includes('organizer') || roles.includes('admin') || profile?.virtual;
 
+    if (!profile || !isOrganizer) {
+      return res.status(403).json({ success: false, error: 'Only organizers can end events' });
+    }
+
+    const idx = events.findIndex(e => e.id === Number(eventId));
+    if (idx !== -1) {
+      events[idx].status = 'Finished';
+      applications
+        .filter(a => a.eventId === Number(eventId) && a.status === 'Present')
+        .forEach(a => {
+          notifications.unshift({
+            id: Date.now() + Math.random(),
+            userEmail: a.email,
+            message: `Event "${events[idx].title}" finished.`,
+            read: false,
+            timestamp: new Date().toISOString(),
+          });
+        });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[EndEvent] Error:', err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Backward compat finish route
+app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
+  const idx = events.findIndex(e => e.id === Number(req.params.eventId));
+  if (idx !== -1) events[idx].status = 'Finished';
+  return res.json({ success: true });
+});
+
+app.post('/api/events/:eventId/mark-attendance', requireAuth(), async (req, res) => {
+  try {
+    const { applicationIds, status = 'Present' } = req.body;
+    applicationIds.forEach(appId => {
+      const i = applications.findIndex(a => a.id === Number(appId) && a.eventId === Number(req.params.eventId));
+      if (i !== -1) applications[i].status = status;
+    });
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Applications
+app.post('/api/applications', requireAuth(), async (req, res) => {
+  try {
+    const a = req.body;
+    if (!a.id || !a.eventId) return res.status(400).json({ success: false, error: 'Invalid application' });
+    if (!applications.find(ap => ap.id === Number(a.id))) applications.push(a);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Payments
 app.post('/api/payments/create', requireAuth(), async (req, res) => {
   try {
+    if (!razorpay) return res.status(500).json({ success: false, error: 'Razorpay not configured' });
     const { amount, receipt, applicationId } = req.body;
     const order = await razorpay.orders.create({
       amount: Number(amount),
       currency: 'INR',
-      receipt: receipt.toString(),
+      receipt: String(receipt),
       payment_capture: 1,
-      notes: { applicationId: applicationId.toString() }
+      notes: { applicationId: String(applicationId) },
     });
     return res.json({ success: true, order });
   } catch (err) {
-    console.error('[Payment] Razorpay create order error:', err);
-    return res.status(500).json({ success: false, error: 'Failed to create payment order' });
+    console.error('[Payment] Create error:', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to create order' });
   }
 });
 
 app.post('/api/payments/verify', requireAuth(), async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, applicationId } = req.body;
-    const generatedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(razorpay_order_id + '|' + razorpay_payment_id)
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || '')
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    if (generatedSignature !== razorpay_signature) {
+    if (sig !== razorpay_signature) {
       return res.status(400).json({ success: false, error: 'Invalid signature' });
     }
 
-    const ids = applicationId.toString().split(',').map(id => Number(id.trim()));
+    const ids = String(applicationId).split(',').map(id => Number(id.trim()));
     ids.forEach(id => {
-      const idx = applications.findIndex(app => app.id === id);
-      if (idx !== -1) applications[idx].status = 'Paid';
+      const i = applications.findIndex(a => a.id === id);
+      if (i !== -1) applications[i].status = 'Paid';
     });
-
     return res.json({ success: true });
   } catch (err) {
-    console.error('[Payment] Verify error:', err);
+    console.error('[Payment] Verify error:', err.message);
     return res.status(500).json({ success: false, error: 'Payment verification failed' });
   }
 });
 
-app.post('/api/webhooks/razorpay', async (req, res) => {
-  return res.json({ status: 'ok' });
-});
+// Webhook
+app.post('/api/webhooks/razorpay', (req, res) => res.json({ status: 'ok' }));
 
+// -------------------------------------------------------
+// Start
+// -------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`[Server] Clerk-Native Backend running on port ${PORT}`);
+  console.log(`[Server] Running on port ${PORT} | Node ${process.version}`);
+  console.log(`[Server] CLERK_SECRET_KEY set: ${!!process.env.CLERK_SECRET_KEY}`);
+  console.log(`[Server] SUPABASE_URL set: ${!!process.env.SUPABASE_URL}`);
 });
