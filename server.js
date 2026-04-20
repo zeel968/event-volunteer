@@ -184,12 +184,11 @@ app.post('/api/events/:eventId/mark-attendance', requireAuth(), async (req, res)
   }
 });
 
-app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
+app.post('/api/events/end', requireAuth(), async (req, res) => {
   try {
-    const { eventId } = req.params;
+    const { eventId } = req.body;
     const profile = await getOrSyncProfile(req.auth);
 
-    // Flexible role check for testing
     const roles = getRoleArray(profile?.role);
     if (!profile || (!roles.includes('organizer') && !roles.includes('admin') && !profile.virtual)) {
       return res.status(403).json({ success: false, error: 'Forbidden: Organizer role required.' });
@@ -213,10 +212,48 @@ app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
   }
 });
 
+app.post('/api/events/:eventId/finish', requireAuth(), async (req, res) => {
+  // Keeping this for backward compatibility temporarily
+  try {
+    const { eventId } = req.params;
+    const eventIndex = events.findIndex(e => e.id === Number(eventId));
+    if (eventIndex !== -1) events[eventIndex].status = 'Finished';
+    return res.json({ success: true });
+  } catch (error) { return res.status(500).json({ success: false }); }
+});
+
 app.get('/api/profile', requireAuth(), async (req, res) => {
   const profile = await getOrSyncProfile(req.auth);
   if (!profile) return res.status(404).json({ success: false, error: 'Profile sync failed.' });
   return res.json({ success: true, profile });
+});
+
+app.post('/api/user/switch-role', requireAuth(), async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['organizer', 'volunteer'].includes(role)) {
+      return res.status(400).json({ success: false, error: 'Invalid role' });
+    }
+
+    // 1. Update Clerk Metadata
+    await clerkClient.users.updateUserMetadata(req.auth.userId, {
+      publicMetadata: { role }
+    });
+
+    // 2. Sync to Supabase Profile for app logic consistency
+    const profile = await getOrSyncProfile(req.auth);
+    if (profile) {
+      await supabase
+        .from('profiles')
+        .update({ role })
+        .eq('id', profile.id);
+    }
+
+    return res.json({ success: true, role });
+  } catch (error) {
+    console.error('[RoleSwitch] Failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to switch role' });
+  }
 });
 
 app.post('/api/profile', requireAuth(), async (req, res) => {

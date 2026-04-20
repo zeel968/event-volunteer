@@ -19,7 +19,6 @@ export const EventProvider = ({ children }) => {
     }
   }, [clerkLoaded, getToken]);
 
-  // Basic State
   const [events, setEvents] = useState(() => {
     const saved = localStorage.getItem('app_events');
     return saved ? JSON.parse(saved) : mockEventsData;
@@ -29,7 +28,6 @@ export const EventProvider = ({ children }) => {
     return saved ? JSON.parse(saved) : [];
   });
   
-  // Fail-safe: Initialize user state with Clerk data if available
   const [user, setUser] = useState(null); 
   const [authLoading, setAuthLoading] = useState(true);
   const [notifications, setNotifications] = useState(() => {
@@ -58,22 +56,31 @@ export const EventProvider = ({ children }) => {
     const syncProfile = async () => {
       try {
         setAuthLoading(true);
-        console.log('[Sync] Attempting to fetch profile from backend...');
+        console.log(`[Sync] Attempting to reach backend: ${api.defaults.baseURL}/profile`);
+        
         const response = await api.get('/profile');
+        
         if (response.data.success && response.data.profile) {
-          console.log('[Sync] Profile synced successfully:', response.data.profile);
+          console.log('[Sync] Profile synced successfully from backend.');
           setUser(response.data.profile);
         } else {
-          throw new Error('Backend sync returned success:false');
+          throw new Error('Backend sync returned invalid response.');
         }
       } catch (err) {
-        console.warn('[Sync] Profile sync from backend failed. Using Clerk fallback.', err.message);
-        // Fallback: Populate user state with Clerk data so the app doesn't hang
+        // DETAILED DIAGNOSTIC LOGGING
+        if (!err.response) {
+          console.error('[Sync] FATAL: Backend server is unreachable. Check VITE_API_BASE_URL.');
+        } else {
+          console.warn('[Sync] Backend sync failed with status:', err.response.status);
+        }
+
+        // Fail-safe: Always provide a user object so the UI doesn't hang
         if (clerkUser) {
+          console.log('[Sync] Using fail-safe Clerk profile.');
           setUser({
             email: clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses[0].emailAddress,
             name: clerkUser.fullName || clerkUser.firstName || 'User',
-            role: 'volunteer', // Default fallback role
+            role: 'volunteer',
             id: clerkUser.id,
             isFallback: true
           });
@@ -91,18 +98,30 @@ export const EventProvider = ({ children }) => {
     setUser(null);
   };
 
-  const setRole = async (role) => {
-    if (!isSignedIn) return { success: false, error: 'Not authenticated' };
+  const switchActivePortal = async (role) => {
+    if (!isSignedIn || !clerkUser) return { success: false, error: 'Not authenticated' };
     try {
-      const response = await api.post('/profile', { role });
+      console.log(`[RoleSwitch] Switching to ${role}...`);
+      const response = await api.post('/api/user/switch-role', { role });
+      
       if (response.data.success) {
-        setUser(response.data.profile);
+        // Force Clerk to reload user metadata in the session
+        await clerkUser.reload();
+        
+        sessionStorage.setItem('activePortal', role);
+        console.log(`[RoleSwitch] Success. Reloaded session.`);
         return { success: true };
       }
       return { success: false, error: response.data.error };
     } catch (err) {
-      return { success: false, error: 'Role sync failed' };
+      console.error('[RoleSwitch] Error:', err);
+      return { success: false, error: 'Failed to switch portal natively' };
     }
+  };
+
+  const setRole = async (role) => {
+    // Legacy support for setRole
+    return await switchActivePortal(role);
   };
 
   const startEvent = async (eventId) => {
@@ -113,20 +132,21 @@ export const EventProvider = ({ children }) => {
       }
       return response.data;
     } catch (error) { 
-      return { success: false, error: error.response?.data?.error || 'Network error' }; 
+      return { success: false, error: error.response?.data?.error || 'Connection error' }; 
     }
   };
 
   const finishEvent = async (eventId) => {
     try {
-      const response = await api.post(`/events/${eventId}/finish`);
+      // Aligned with user's specific request for /api/events/end
+      const response = await api.post('/api/events/end', { eventId });
       if (response.data.success) {
         setEvents(prev => prev.map(e => e.id === Number(eventId) ? { ...e, status: 'Finished' } : e));
       }
       return response.data;
     } catch (error) { 
-      console.error('[EventFlow] Finish error:', error.response?.data || error.message);
-      return { success: false, error: error.response?.data?.error || 'Network error' }; 
+      console.error('[EventFlow] Connection failed:', error.message);
+      return { success: false, error: error.response?.data?.error || 'Connection error: Backend unreachable' }; 
     }
   };
 
@@ -137,14 +157,14 @@ export const EventProvider = ({ children }) => {
         setApplications(prev => prev.map(app => applicationIds.includes(app.id) ? { ...app, status } : app));
       }
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { return { success: false, error: 'Connection error' }; }
   };
 
   const createPayment = async (amount, receipt, applicationId) => {
     try {
       const response = await api.post('/payments/create', { amount, receipt, applicationId });
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { return { success: false, error: 'Connection error' }; }
   };
 
   const confirmPayment = async (paymentData) => {
@@ -155,14 +175,14 @@ export const EventProvider = ({ children }) => {
         setApplications(prev => prev.map(app => ids.includes(app.id) ? { ...app, status: 'Paid' } : app));
       }
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { return { success: false, error: 'Connection error' }; }
   };
 
   const payAll = async (payments) => {
     try {
       const response = await api.post('/payments/pay-all', { payments });
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { return { success: false, error: 'Connection error' }; }
   };
 
   const savePaymentInfo = async (upiId) => {
@@ -170,7 +190,7 @@ export const EventProvider = ({ children }) => {
       const response = await api.post('/profile', { upi_id: upiId });
       if (response.data.success) setUser(response.data.profile);
       return response.data;
-    } catch (error) { return { success: false, error: 'Network error' }; }
+    } catch (error) { return { success: false, error: 'Connection error' }; }
   };
 
   const markNotificationAsRead = (id) => {
@@ -199,20 +219,6 @@ export const EventProvider = ({ children }) => {
     setApplications(apps => apps.map(app => {
       if (app.id === applicationId) {
         updatedApp = { ...app, status: newStatus };
-        if (newStatus === 'Approved' && app.status !== 'Approved') {
-          setEvents(currentEvents => currentEvents.map(event => {
-            if (event.id === app.eventId && event.availableSlots > 0) {
-              const newNotification = {
-                id: Date.now(), userEmail: app.email,
-                message: 'Your application for ' + event.title + ' has been approved!',
-                read: false, timestamp: new Date().toISOString()
-              };
-              setNotifications(prev => [newNotification, ...prev]);
-              return { ...event, availableSlots: event.availableSlots - 1 };
-            }
-            return event;
-          }));
-        }
         return updatedApp;
       }
       return app;
@@ -234,7 +240,7 @@ export const EventProvider = ({ children }) => {
     <EventContext.Provider value={{
       events, applications, user, authLoading, notifications,
       clerkLoaded, isSignedIn, clerkUser,
-      logout, setRole,
+      logout, setRole, switchActivePortal,
       markNotificationAsRead, addEvent,
       applyToEvent, updateApplicationStatus,
       startEvent, finishEvent, markAttendance,

@@ -12,7 +12,7 @@ const isEventFinished = (event) => {
 };
 
 function OrganizerDashboard() {
-  const { user, events, applications, finishEvent } = useEvents();
+  const { user, events, applications, finishEvent, switchActivePortal } = useEvents();
   const navigate = useNavigate();
   const [now, setNow] = useState(new Date());
   const [processingId, setProcessingId] = useState(null);
@@ -69,9 +69,13 @@ function OrganizerDashboard() {
         </div>
         <div style={{ display: "flex", gap: "12px" }}>
            <button 
-             onClick={() => {
-                sessionStorage.removeItem('activePortal');
-                navigate('/volunteer/login');
+             onClick={async () => {
+               const res = await switchActivePortal('volunteer');
+               if (res.success) {
+                 navigate('/volunteer/dashboard');
+               } else {
+                 alert('Failed to switch portal: ' + res.error);
+               }
              }}
              style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", padding: "12px 20px", borderRadius: "16px", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: "10px", fontSize: "0.9rem" }}
            >

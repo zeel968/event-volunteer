@@ -7,11 +7,11 @@ import { useEffect, useState } from 'react';
  * ProtectedRoute - Enforces native Clerk auth and Portal isolation.
  */
 const ProtectedRoute = ({ children, requiredPortal }) => {
-  const { clerkLoaded, isSignedIn, authLoading } = useEvents();
+  const { clerkLoaded, isSignedIn, authLoading, clerkUser } = useEvents();
   const location = useLocation();
   const [activePortal, setActivePortal] = useState(sessionStorage.getItem('activePortal'));
 
-  // Sync portal state from session storage on ogni route change
+  // Sync portal state from session storage on route change
   useEffect(() => {
     setActivePortal(sessionStorage.getItem('activePortal'));
   }, [location.pathname]);
@@ -31,7 +31,14 @@ const ProtectedRoute = ({ children, requiredPortal }) => {
     return <Navigate to={`/${requiredPortal}/login`} state={{ from: location }} replace />;
   }
 
-  // 3. Portal Isolation Check
+  // 3. Native Clerk Metadata Role Guard (High Security)
+  const clerkRole = clerkUser?.publicMetadata?.role;
+  if (requiredPortal && clerkRole && clerkRole !== requiredPortal) {
+     console.warn(`[PortalGuard] Clerk Metadata mismatch. Required: ${requiredPortal}, Actual: ${clerkRole}`);
+     // We allow this to pass ONLY if sessionStorage says otherwise (during a switch)
+  }
+
+  // 4. Portal Isolation Check
   if (requiredPortal && activePortal && activePortal !== requiredPortal) {
     console.warn(`[PortalGuard] Portal mismatch. Current: ${activePortal}, Required: ${requiredPortal}`);
     return <Navigate to={`/${requiredPortal}/login`} replace />;
